@@ -111,9 +111,16 @@ gen_depends() {
         # 经 ldconfig 缓存把 soname 解析为真实库路径再查属主:
         # 直接 dpkg -S 按名字匹配会把 -dev 包的文件抢先命中(CI 实证混入
         # libglib2.0-dev)。NEEDED 均带版本后缀,与 dev 的无版本符号链接不冲突。
+        # 注意: focal 是 usr-merge(/lib → usr/lib 符号链接),ldconfig -p 打印
+        # /lib/... 形式路径,而 usr-merge 后多数包在 dpkg 数据库登记 usr/lib/...
+        # ——必须 readlink -f 还原真实路径,否则除 glibc(仍用老 /lib 路径)外
+        # 全部解析失败(CI 实证: Depends 只剩 libc6)。
         # awk 不提前 exit、head 换全量读取的 sed —— SIGPIPE 红线(指南)。
         path="$(ldconfig -p | awk -v lib="$lib" '$1 == lib {print $NF}' | sed -n 1p || true)"
-        [ -n "$path" ] && dpkg -S "$path" 2>/dev/null | sed -n 1p | cut -d: -f1 || true
+        [ -n "$path" ] || continue
+        path="$(readlink -f "$path")"
+        [ -n "$path" ] || continue
+        dpkg -S "$path" 2>/dev/null | sed -n 1p | cut -d: -f1 || true
     done | sed 's/:arm64$//' | sort -u | grep -vE -- '-(dev|doc|dbg)$' || true
 }
 
@@ -143,6 +150,16 @@ assemble_deb() {
     # dpkg 控制字段语法: 多包必须逗号+空格分隔(空格分隔会 parse error,CI 实证)
     recommends="$(cut -d'|' -f1 "$SCRIPT_DIR/external-tools.list" | grep -v '^#' | grep -v '^$' | paste -sd, - | sed 's/,/, /g')"
     [ -n "$depends" ] || die "empty Depends - ELF scan failed"
+    # 理智底线: engrampa 是 GTK 应用,Depends 缺 libgtk-3-0/libglib2.0-0
+    # 说明 ELF 依赖解析静默退化(CI 实证: usr-merge 路径解析失败后只剩 libc6)
+    case "$depends" in
+        *libgtk-3-0*) ;;
+        *) die "Depends sanity check: libgtk-3-0 missing ('$depends')" ;;
+    esac
+    case "$depends" in
+        *libglib2.0-0*) ;;
+        *) die "Depends sanity check: libglib2.0-0 missing ('$depends')" ;;
+    esac
 
     sed -e "s/@@VERSION@@/$VERSION/g" \
         -e "s/@@ARCH@@/$ARCH/g" \
