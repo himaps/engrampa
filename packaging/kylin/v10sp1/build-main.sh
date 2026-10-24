@@ -79,9 +79,12 @@ run_build() {
     # -Dcaja-actions=false: 麒麟 V10 文件管理器是 peony(右键仍调 engrampa CLI),
     #   构建 caja 扩展会无谓引入 libcaja-extension 依赖
     # -Dpackagekit=false:   麒麟走自己的软件商店体系
-    meson setup "$SRC_ROOT/build" --prefix=/usr --buildtype=release \
+    # 注意: focal 的 python3.8 argparse 对"选项之后跟 sourcedir 位置参数"会报
+    # unrecognized arguments(CI 实证),故用规范形式: cwd=源码目录,只传 builddir
+    ( cd "$SRC_ROOT" && \
+      meson setup "$SRC_ROOT/build" --prefix=/usr --buildtype=release \
         -Dcaja-actions=false -Dpackagekit=false \
-        "$SRC_ROOT" || die "meson setup failed"
+    ) || die "meson setup failed"
     ninja -C "$SRC_ROOT/build" || die "ninja failed"
 
     rm -rf "$SRC_ROOT/pkg-root"

@@ -73,15 +73,19 @@ download_closure() {
     seeds="$(seed_packages | sort -u)"
     [ -n "$seeds" ] || die "empty seed set"
 
-    # apt-cache depends --recurse:含 Pre-Depends/Depends 全传递闭包;
-    # 候选项行含备选 "a | b" 形式,取每行第一个名字
+    # apt-cache depends --recurse:含 Pre-Depends/Depends 全传递闭包。
+    # 输出格式: 关系行("  Depends: foo"/"|Depends: foo")与包名行(缩进的纯名字,
+    # 递归层越深缩进越多)交替 —— 早期版本只 grep 列首会把闭包退化成种子集合。
+    # 剥掉缩进后过滤关系标签行与 <circular> 等标记,剩下的即包名(含备选,备选
+    # 会被后续 policy 检查自然过滤)。
     local names
     names="$(apt-cache depends --recurse \
                 --no-recommends --no-suggests --no-conflicts \
                 --no-breaks --no-replaces --no-enhances \
                 $seeds \
-             | grep -E '^[a-zA-Z0-9]' \
-             | awk '{print $1}' \
+             | sed 's/^[[:space:]]*//' \
+             | grep -vE '^(Depends|PreDepends|Conflicts|Breaks|Replaces|Enhances|Suggests|Recommends):' \
+             | grep -vE '^(\||<|>|#|$)' \
              | sort -u)"
 
     rm -rf "$CACHE_DIR"; mkdir -p "$CACHE_DIR"
