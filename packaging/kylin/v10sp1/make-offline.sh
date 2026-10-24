@@ -213,7 +213,8 @@ download_kylin_fixtures() {
     local -a idxs=()
     for suite in 10.1 10.1-2203-updates 10.1-2403-updates; do
         for comp in main universe; do
-            if curl -sf --max-time 300 -o "$CACHE_DIR/kylin-idx-$suite-$comp.gz" \
+            if curl -sf --retry 4 --retry-delay 15 --max-time 240 \
+                  -o "$CACHE_DIR/kylin-idx-$suite-$comp.gz" \
                   "$KYLIN_MIRROR/dists/$suite/$comp/binary-arm64/Packages.gz"; then
                 idxs+=("$CACHE_DIR/kylin-idx-$suite-$comp.gz")
             else
@@ -299,7 +300,7 @@ download_kylin_specific() {
     local suite idx url ver fn
     for suite in $KYLIN_SUITES; do
         url="$KYLIN_MIRROR/dists/$suite/main/binary-arm64/Packages.gz"
-        if curl -sf --max-time 300 -o "$CACHE_DIR/kylin-Packages.gz" "$url"; then
+        if curl -sf --retry 4 --retry-delay 15 --max-time 240 -o "$CACHE_DIR/kylin-Packages.gz" "$url"; then
             # 注意: 索引解压 ~30MB,awk 不得提前 exit(指南红线: SIGPIPE 杀生产端,
             # pipefail 下整脚本 141 退出,CI 实证)。全量扫描,命中后关标志防重复。
             ver="$(zcat "$CACHE_DIR/kylin-Packages.gz" \
