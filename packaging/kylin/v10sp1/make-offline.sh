@@ -253,15 +253,20 @@ PYEOF
 )" || true
         if [ -n "$fnames" ]; then
             log "Kylin fixture closure (suite $suite): $(printf '%s\n' "$fnames" | wc -l) packages"
-            ( cd "$DIST_OUT/verify-baseline-kylin"
-              ok=1
-              while read -r fn; do
-                  [ -n "$fn" ] || continue
-                  curl -sf --retry 3 --max-time 300 -O "$KYLIN_MIRROR/$fn" || { ok=0; echo "download failed: $fn" >&2; break; }
-              done <<< "$fnames"
-              exit $ok )
-            [ $? -eq 0 ] || die "failed to download Kylin fixture debs"
-            return 0
+            # 注意: 子壳状态必须 0=成功;此前 ok 语义写反(成功=1)导致子壳以 1
+            # 退出,set -e 在子壳语句处直接杀脚本(下一行的 || die 救不了
+            # 独立语句),CI 表现为无任何报错的静默死亡。
+            if ( cd "$DIST_OUT/verify-baseline-kylin"
+                 while read -r fn; do
+                     [ -n "$fn" ] || continue
+                     curl -sf --retry 3 --max-time 300 -O "$KYLIN_MIRROR/$fn" \
+                         || { echo "download failed: $fn" >&2; exit 1; }
+                 done <<< "$fnames"
+                 exit 0 ); then
+                return 0
+            else
+                die "failed to download Kylin fixture debs"
+            fi
         fi
     done
     die "dbus-x11 not found in any Kylin suite (main/arm64)"

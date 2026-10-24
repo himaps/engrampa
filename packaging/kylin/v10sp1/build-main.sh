@@ -111,16 +111,22 @@ gen_depends() {
         # 经 ldconfig 缓存把 soname 解析为真实库路径再查属主:
         # 直接 dpkg -S 按名字匹配会把 -dev 包的文件抢先命中(CI 实证混入
         # libglib2.0-dev)。NEEDED 均带版本后缀,与 dev 的无版本符号链接不冲突。
-        # 注意: focal 是 usr-merge(/lib → usr/lib 符号链接),ldconfig -p 打印
-        # /lib/... 形式路径,而 usr-merge 后多数包在 dpkg 数据库登记 usr/lib/...
-        # ——必须 readlink -f 还原真实路径,否则除 glibc(仍用老 /lib 路径)外
-        # 全部解析失败(CI 实证: Depends 只剩 libc6)。
+        # usr-merge 两面性(CI 实证各踩一次):
+        #   - 多数包 dpkg 库记 usr/lib/...,而 ldconfig -p 打印 /lib/... 老路径
+        #     → 必须 readlink -f 成真实路径再查;
+        #   - 唯独 glibc 在 dpkg 库里仍记 /lib/... 老路径,readlink 反而查不到
+        #     → 两条路径都试。
         # awk 不提前 exit、head 换全量读取的 sed —— SIGPIPE 红线(指南)。
         path="$(ldconfig -p | awk -v lib="$lib" '$1 == lib {print $NF}' | sed -n 1p || true)"
         [ -n "$path" ] || continue
-        path="$(readlink -f "$path")"
-        [ -n "$path" ] || continue
-        dpkg -S "$path" 2>/dev/null | sed -n 1p | cut -d: -f1 || true
+        owner="$(dpkg -S "$path" 2>/dev/null | sed -n 1p | cut -d: -f1 || true)"
+        if [ -z "$owner" ]; then
+            rpath="$(readlink -f "$path")"
+            if [ -n "$rpath" ] && [ "$rpath" != "$path" ]; then
+                owner="$(dpkg -S "$rpath" 2>/dev/null | sed -n 1p | cut -d: -f1 || true)"
+            fi
+        fi
+        [ -n "$owner" ] && printf '%s\n' "$owner"
     done | sed 's/:arm64$//' | sort -u | grep -vE -- '-(dev|doc|dbg)$' || true
 }
 
