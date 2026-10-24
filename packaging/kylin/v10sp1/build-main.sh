@@ -42,6 +42,7 @@ install_build_deps() {
     log "installing build dependencies"
     timeout 1800 apt-get install -y --no-install-recommends \
         build-essential ninja-build pkg-config git file dpkg-dev \
+        curl xz-utils \
         python3-pip \
         libglib2.0-dev libgtk-3-dev libjson-glib-dev \
         libsm-dev libice-dev libmagic-dev \
