@@ -42,28 +42,46 @@ is_blacklisted() {
 }
 
 # ---------------------------------------------------------------- 种子集合
+# 注意: 本函数在命令替换 $(...) 中执行,一切诊断必须走 stderr,
+# 否则会被吞进变量(CI 实证: 只见汇总 die 不见具体包名)。
+# 判定不用 "grep -q 于管道"(指南红线),捕获后整串匹配;
+# "Candidate: (none)"(已知但无候选)同样视为缺失。
+apt_has_candidate() {
+    local out
+    out="$(apt-cache policy "$1" 2>/dev/null || true)"
+    case "$out" in
+        *Candidate:*)
+            case "$out" in *Candidate:\ *none*) return 1 ;; esac
+            return 0
+            ;;
+    esac
+    return 1
+}
+
 seed_packages() {
-    local depends_field p
+    local depends_field
     # 主包 ELF 依赖
     depends_field="$(dpkg-deb -f "$MAIN_DEB" Depends)"
-    echo "$depends_field" | tr ',' '\n' | sed -E 's/\(.*//; s/^\s+|\s+$//g' | grep -v '^$'
+    echo "$depends_field" | tr ',' '\n' | sed -E 's/\(.*//; s/^[[:space:]]+|[[:space:]]+$//g' | grep -v '^$'
     # 外部工具(required 必须齐;optional 缺了仅告警跳过)
-    local all_ok=1
+    local all_ok=1 pkg level note missing=""
     while IFS='|' read -r pkg level note; do
         case "$pkg" in ''|'#'*) continue ;; esac
-        pkg="$(echo "$pkg" | xargs)"
-        if apt-cache policy "$pkg" 2>/dev/null | grep -q 'Candidate:'; then
+        pkg="$(printf '%s' "$pkg" | tr -d '[:space:]')"
+        if apt_has_candidate "$pkg"; then
             echo "$pkg"
         else
             if [ "$level" = "required" ]; then
-                log "ERROR: REQUIRED tool package not in archive: $pkg ($note)"
+                missing="$missing $pkg"
                 all_ok=0
+                echo "[make-offline] DEBUG: apt-cache policy '$pkg' output:" >&2
+                apt-cache policy "$pkg" 2>&1 | sed 's/^/  | /' >&2
             else
-                log "WARNING: optional tool package not in archive, skipped: $pkg ($note)"
+                echo "[make-offline] WARNING: optional tool package not in archive, skipped: $pkg" >&2
             fi
         fi
     done < "$SCRIPT_DIR/external-tools.list"
-    [ "$all_ok" -eq 1 ] || die "required tool packages missing from apt archive"
+    [ "$all_ok" -eq 1 ] || die "required tool packages missing from apt archive:$missing"
 }
 
 # --------------------------------------------------------- 闭包展开与下载
@@ -94,7 +112,7 @@ download_closure() {
     : > "$final_list_tmp"
     for p in $names; do
         # 有候选版本的才是真实包(排除虚拟包名)
-        apt-cache policy "$p" 2>/dev/null | grep -q 'Candidate:' || continue
+        apt_has_candidate "$p" || continue
         if is_blacklisted "$p"; then
             skipped_essential=$((skipped_essential+1))
             continue
