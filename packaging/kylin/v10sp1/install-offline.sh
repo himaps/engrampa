@@ -57,13 +57,31 @@ if [ -n "$INSTALLED_VER" ] && [ "$INSTALLED_VER" != "$MAIN_VER" ]; then
 fi
 
 # ------------------------------------------------ 只装缺失(零升级,无版本比较)
+# objc 家族(unar/gnustep 链)依赖 libobjc4;libobjc4 与 gcc-10-base 之间是
+# "严格等于"钉版本,只能取自麒麟自家归档(debs-kylin/)。因此安装分两批:
+#   主批   = 与目标版本无关的闭包(失败即致命);
+#   目标批 = objc 家族 + 麒麟 libobjc4(在非麒麟系统上可能因版本钉死装不上,
+#            失败降级为醒目告警 —— unar(含 rar 支撑)在该机不可用)。
+OBJC_FAMILY="unar gnustep-base-common gnustep-base-runtime gnustep-common libgnustep-base1.26"
+
+is_objc_family() {
+    case " $OBJC_FAMILY " in
+        *" $1 "*) return 0 ;;
+    esac
+    return 1
+}
+
 TO_INSTALL=()
+TO_INSTALL_OBJC=()
 for deb in "$DEBS_DIR"/*.deb; do
     [ -e "$deb" ] || continue
     pkg="$(dpkg-deb -f "$deb" Package)"
     state="$(dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null || true)"
     if [ "$state" = "install ok installed" ]; then
         log "skip (already installed): $pkg"
+    elif is_objc_family "$pkg"; then
+        TO_INSTALL_OBJC+=("$deb")
+        log "to install (missing):      $pkg [target-specific]"
     else
         TO_INSTALL+=("$deb")
         log "to install (missing):      $pkg"
@@ -73,14 +91,36 @@ done
 if [ "${#TO_INSTALL[@]}" -gt 0 ]; then
     log "installing ${#TO_INSTALL[@]} missing dependency package(s) ..."
     if ! dpkg -i -- "${TO_INSTALL[@]}" >>"$LOG" 2>&1; then
-        # 失败时把日志尾部回显到控制台,避免细节只存在于易失的日志文件里
-        echo "[engrampa-offline] dpkg -i FAILED, tail of $LOG:" >&2
-        tail -60 "$LOG" >&2 || true
+        # 失败时把错误上下文回显到控制台,避免细节只存在于易失的日志文件里
+        echo "[engrampa-offline] dpkg -i FAILED. Error context from $LOG:" >&2
+        grep -inE -B2 -A8 'error|fail' "$LOG" | tail -80 >&2 || true
+        echo "[engrampa-offline] dpkg --audit:" >&2
+        dpkg --audit >&2 || true
         die "dpkg -i failed for dependency closure - see $LOG"
     fi
 else
-    log "all dependency packages already satisfied, nothing to install"
+    log "all main-batch dependency packages already satisfied"
 fi
+
+# ---- 目标敏感批: objc 家族 + 麒麟 libobjc4(尽力而为) ----
+KYLIN_DEBS=()
+for deb in "$DIR"/debs-kylin/*.deb; do
+    [ -e "$deb" ] && KYLIN_DEBS+=("$deb")
+done
+if [ "${#TO_INSTALL_OBJC[@]}" -gt 0 ] || [ "${#KYLIN_DEBS[@]}" -gt 0 ]; then
+    log "installing target-specific batch (${#TO_INSTALL_OBJC[@]} objc-family + ${#KYLIN_DEBS[@]} Kylin debs) ..."
+    set -- "${TO_INSTALL_OBJC[@]}" "${KYLIN_DEBS[@]}"
+    if dpkg -i -- "$@" >>"$LOG" 2>&1; then
+        log "target-specific batch installed (unar/RAR support active)"
+    else
+        echo "[engrampa-offline] WARNING: target-specific batch failed on this machine." >&2
+        echo "  unar (RAR 支撑) 及 gnustep 依赖未能配置,常见原因:本机 gcc-10-base" >&2
+        echo "  版本与麒麟归档的 libobjc4 钉死版本不一致。其余功能不受影响。" >&2
+        grep -inE -B2 -A8 'error|dependency problems' "$LOG" | tail -40 >&2 || true
+        log "WARNING: unar/RAR support unavailable on this machine (see above)"
+    fi
+fi
+dpkg --configure -a >>"$LOG" 2>&1 || true
 
 # ------------------------------------------------ 应用本体(显式升级意图)
 log "installing engrampa $MAIN_VER (this is the point of this bundle)"
@@ -107,15 +147,19 @@ case "$VER_OUT" in
 esac
 
 MISSING_TOOLS=""
-for tool in 7z zip unzip unar lsar cpio; do
+for tool in 7z zip unzip cpio; do
     command -v "$tool" >/dev/null 2>&1 || MISSING_TOOLS="$MISSING_TOOLS $tool"
 done
 if [ -n "$MISSING_TOOLS" ]; then
-    log "WARNING: external tools still missing:$MISSING_TOOLS"
-    log "         (bundle incomplete or installation failed - see $LOG)"
+    log "ERROR: core external tools still missing:$MISSING_TOOLS"
     exit 2
 fi
-log "external tools present: 7z zip unzip unar lsar cpio"
+log "core external tools present: 7z zip unzip cpio"
+
+# unar/lsar(RAR 支撑)属目标敏感批,缺失仅告警(见上文 target-specific batch)
+for tool in unar lsar; do
+    command -v "$tool" >/dev/null 2>&1 || log "WARNING: $tool unavailable (RAR support off on this machine)"
+done
 
 # 收尾缓存刷新(与主包 postinst 幂等一致)
 command -v glib-compile-schemas >/dev/null 2>&1 \

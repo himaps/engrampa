@@ -75,9 +75,17 @@ sudo /usr/lib/engrampa-offline/install-offline.sh
   没有任何版本比较分支，**绝不升级/替换已装系统组件**；
 - 应用本体 `engrampa` 的替换是用户运行本套件的显式意图，是唯一例外；
 - 闭包构建期已剔除 Essential=yes 与黑名单（glibc、`systemd*`、`dbus*`、`libpam*`、
-  `udev`、`login`、`passwd`）——deepin-screenshot 事故的教训，这些包目标机必已同源安装；
-- 装完 ldd 复验 + `engrampa --version` + required 工具检查，
-  全部就绪或仍缺清单都会明确报告，日志在 `/var/log/engrampa-offline-install.log`。
+  `udev`、`login`、`passwd`，以及 **GCC 运行时家族**）——后者因
+  `libgcc-s1/libstdc++6/libobjc4` 与 `gcc-10-base` 之间互相"严格等于"钉版本
+  （麒麟的 gcc-10-base 是 `10.3.0-1kylin1~20.04`，focal 的任何一份都钉不上），
+  跨源携带必然 configure 失败，只能视为系统基件交给目标机自带；
+- **libobjc4 例外**（unar/gnustep 链需要、非普装）：从麒麟自家归档
+  `archive.kylinos.cn/kylin/KYLIN-ALL/`（suite `10.1`，main/arm64）拉取，随包放在
+  `debs-kylin/`，安装时与 objc 家族构成"目标敏感批"单独装——在非麒麟版本环境
+  失败时降级为醒目告警（unar/RAR 在该机不可用），不影响其余功能；
+- 装完 ldd 复验 + `engrampa --version` + 核心工具检查（7z/zip/unzip/cpio 致命，
+  unar/lsar 因上述原因为警告），全部就绪或仍缺清单都会明确报告，
+  日志在 `/var/log/engrampa-offline-install.log`。
 
 ## 回滚（覆盖预装的"归档管理器"前必读）
 

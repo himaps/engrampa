@@ -43,11 +43,20 @@ SNAP_BEFORE=/tmp/dpkg-before.txt
 dpkg-query -W -f='${Package}\t${Version}\n' 2>/dev/null | sort > "$SNAP_BEFORE" || true
 log "snapshot before: $(wc -l < "$SNAP_BEFORE") packages"
 
+# Docker 系镜像用 dpkg path-exclude 裁掉了 man 页,会让依赖
+# update-alternatives --slave man 页的包(实证: gawk)postinst 失败;
+# 真机无此裁剪。清掉 path-exclude,让容器行为与真机一致。
+for cfg in /etc/dpkg/dpkg.cfg /etc/dpkg/dpkg.cfg.d/*; do
+    if [ -f "$cfg" ]; then
+        sed -i '/^path-exclude/d' "$cfg" && log "stripped path-exclude from $cfg"
+    fi
+done
+
 # ---------------------------------------------------------------- 桌面基线夹具
 # 极简容器缺 libdbus-1-3/libselinux1(闭包黑名单项,真实麒麟桌面必装,
 # 且 libavahi-client3/rpm-common/cdebconf 依赖之)。先装夹具模拟桌面基线。
 if [ -d "$DIST_DIR/verify-baseline" ] && ls "$DIST_DIR"/verify-baseline/*.deb >/dev/null 2>&1; then
-    log "provisioning desktop-baseline fixtures (libdbus-1-3, libselinux1)"
+    log "provisioning desktop-baseline fixtures (libdbus-1-3, libselinux1, bash)"
     dpkg -i "$DIST_DIR"/verify-baseline/*.deb || die "baseline fixture install failed"
 else
     log "WARNING: no verify-baseline fixtures found in $DIST_DIR"

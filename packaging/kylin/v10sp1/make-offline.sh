@@ -31,7 +31,12 @@ die() { echo "[make-offline] ERROR: $*" >&2; exit 1; }
 # ---------------------------------------------------------------- 黑名单
 # 指南红线:glibc 永不打包;systemd/dbus/PAM/udev/login/passwd 一旦被离线闭包
 # 升级,用户系统直接崩(deepin-screenshot 事故实证)。
-BLACKLIST_RE='^(libc6|libc-bin|locales|libnss-[a-z]+|libselinux1?)$|^(systemd|systemd-.*)$|^libsystemd.*$|^(udev|libudev.*)$|^(dbus|dbus-.*)$|^libdbus.*$|^libpam.*$|^login$|^passwd$|^shadow$'
+# 追加:GCC 运行时家族(libgcc-s1/libstdc++6/libobjc4/... 与 gcc-10-base 之间
+# 互相"严格等于"钉版本)——麒麟的 gcc-10-base 是 10.3.0-1kylin1~20.04,
+# focal 的任何一份都钉不上,跨源携带必然 configure 失败(CI 实证)。
+# 这些包属系统基件,真机必装;其中 libobjc4 是唯一非普装的,单独走
+# 麒麟归档拉取(见 download_kylin_specific)。
+BLACKLIST_RE='^(libc6|libc-bin|locales|libnss-[a-z]+|libselinux1?)$|^(systemd|systemd-.*)$|^libsystemd.*$|^(udev|libudev.*)$|^(dbus|dbus-.*)$|^libdbus.*$|^libpam.*$|^login$|^passwd$|^shadow$|^(gcc-10-base|libgcc-s1|libstdc\+\+6|libobjc4|libatomic1|libgomp1|libitm1|liblsan0|libtsan0|libubsan1|libquadmath0)$'
 
 is_blacklisted() {
     local p="$1"
@@ -143,16 +148,53 @@ download_closure() {
     log "required tool packages verified in cache"
 }
 
+# ------------------------------------------------ 麒麟专属包(libobjc4)
+# libobjc4(unar/gnustep 链需要)被 GCC-runtime 黑名单排除后,必须从麒麟自家
+# 归档取:麒麟的 libobjc4 钉麒麟的 gcc-10-base,天然自洽;focal 的在麒麟上
+# 因严格等号钉永远装不上。归档/suite/组件来自 distrotwin/kylin 的 v10sp1.conf。
+KYLIN_MIRROR="http://archive.kylinos.cn/kylin/KYLIN-ALL"
+KYLIN_SUITES="10.1-2403-updates 10.1-2203-updates 10.1"
+
+download_kylin_specific() {
+    log "fetching libobjc4 from the Kylin archive"
+    mkdir -p "$CACHE_DIR"
+    local suite idx url ver fn
+    for suite in $KYLIN_SUITES; do
+        url="$KYLIN_MIRROR/dists/$suite/main/binary-arm64/Packages.gz"
+        if curl -sf --max-time 300 -o "$CACHE_DIR/kylin-Packages.gz" "$url"; then
+            ver="$(zcat "$CACHE_DIR/kylin-Packages.gz" | awk '
+                /^Package: libobjc4$/ {in_st=1}
+                in_st && /^Version:/  {sub(/^Version: /,""); print; exit}
+            ' || true)"
+            if [ -n "$ver" ]; then
+                fn="$(zcat "$CACHE_DIR/kylin-Packages.gz" | awk '
+                    /^Package: libobjc4$/ {in_st=1}
+                    in_st && /^Filename:/ {sub(/^Filename: /,""); print; exit}
+                ')"
+                log "Kylin libobjc4: $ver (suite $suite)"
+                mkdir -p "$DIST_OUT/kylin-debs"
+                ( cd "$DIST_OUT/kylin-debs" && \
+                  curl -sf --retry 3 --max-time 300 -O \
+                    "$KYLIN_MIRROR/$fn" ) \
+                    || die "failed to download Kylin libobjc4"
+                return 0
+            fi
+        fi
+    done
+    die "libobjc4 not found in any Kylin suite (main/arm64)"
+}
+
 # ------------------------------------------------ 验证环境基线夹具
 # libdbus-1-3 / libselinux1 在黑名单(指南红线,不进离线包),真实麒麟桌面必装;
 # 但极简验证容器(ubuntu:20.04 与 distrotwin base)没有它们,而闭包中
 # libavahi-client3/rpm-common/cdebconf 依赖之。作为验证夹具单独放行:
 # 随产物分发、仅供 verify-offline 预装模拟桌面基线,绝不进入离线 deb。
 download_verify_baseline() {
-    log "downloading verify-baseline fixtures (libdbus-1-3, libselinux1)"
+    log "downloading verify-baseline fixtures (libdbus-1-3, libselinux1, bash)"
     mkdir -p "$DIST_OUT/verify-baseline"
+    # bash: distrotwin kylin base 容器未装 bash(lrzip 依赖它),真机必有
     ( cd "$DIST_OUT/verify-baseline" && \
-      apt-get download -q libdbus-1-3 libselinux1 ) \
+      apt-get download -q libdbus-1-3 libselinux1 bash ) \
         || die "failed to download verify-baseline fixtures"
 }
 
@@ -161,11 +203,13 @@ assemble() {
     log "assembling offline deb root"
     rm -rf "$OFFLINE_ROOT"
     install -d "$OFFLINE_ROOT/usr/lib/engrampa-offline/debs"
+    install -d "$OFFLINE_ROOT/usr/lib/engrampa-offline/debs-kylin"
     install -d "$OFFLINE_ROOT/usr/lib/engrampa-offline/pkgs"
     install -d "$OFFLINE_ROOT/usr/share/doc/engrampa-offline"
     install -d "$OFFLINE_ROOT/DEBIAN"
 
     install -m 644 "$CACHE_DIR"/*.deb "$OFFLINE_ROOT/usr/lib/engrampa-offline/debs/"
+    install -m 644 "$DIST_OUT"/kylin-debs/*.deb "$OFFLINE_ROOT/usr/lib/engrampa-offline/debs-kylin/"
     install -m 644 "$MAIN_DEB" "$OFFLINE_ROOT/usr/lib/engrampa-offline/pkgs/"
     install -m 755 "$SCRIPT_DIR/install-offline.sh" \
         "$OFFLINE_ROOT/usr/lib/engrampa-offline/install-offline.sh"
@@ -175,7 +219,8 @@ assemble() {
     # manifest:包名/版本/校验和,供目标机审计
     {
         echo "# engrampa-offline $VERSION ($ARCH) dependency closure"
-        ( cd "$OFFLINE_ROOT/usr/lib/engrampa-offline" && sha256sum debs/*.deb pkgs/*.deb )
+        ( cd "$OFFLINE_ROOT/usr/lib/engrampa-offline" && \
+          sha256sum debs/*.deb debs-kylin/*.deb pkgs/*.deb )
     } > "$OFFLINE_ROOT/usr/lib/engrampa-offline/manifest.txt"
 
     sed -e "s/@@VERSION@@/$VERSION/g" -e "s/@@ARCH@@/$ARCH/g" \
@@ -206,6 +251,9 @@ selfcheck() {
     [ "$n" -gt 0 ] || die "self-check: dependency closure empty"
     log "closure debs in bundle: $n"
 
+    printf '%s\n' "$listing" | grep "usr/lib/engrampa-offline/debs-kylin/libobjc4_" >/dev/null \
+        || die "self-check: Kylin libobjc4 NOT in debs-kylin/"
+
     # required 工具逐个断言(指南:曾发生离线包漏拷本体,靠自检兜底)
     local p level
     while IFS='|' read -r p level note; do
@@ -220,6 +268,7 @@ selfcheck() {
 
 main() {
     download_closure
+    download_kylin_specific
     download_verify_baseline
     assemble
     selfcheck
