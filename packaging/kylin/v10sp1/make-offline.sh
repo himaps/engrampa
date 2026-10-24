@@ -107,12 +107,16 @@ expand_closure() {
             apt_has_candidate "$p" || continue
             is_blacklisted "$p" && continue
             out="$out $p"
+            # 注意: 非 --recurse 模式的输出没有独立包名行,依赖名就在
+            # "Depends: foo" 关系行上(递归格式过滤器在这里会收集到 0 个
+            # 依赖,闭包退化为种子集合,CI 实证)。从关系行提取名字,
+            # 剥掉版本括号;<virtual> 形态在入队处跳过。
             deps="$(apt-cache depends --no-recommends --no-suggests --no-conflicts \
                        --no-breaks --no-replaces --no-enhances "$p" 2>/dev/null \
-                    | sed 's/^[[:space:]]*//' \
-                    | grep -vE '^(Depends|PreDepends|Conflicts|Breaks|Replaces|Enhances|Suggests|Recommends):' \
-                    | grep -vE '^(\||<|>|#|$)' || true)"
+                    | sed -n -E 's/^[[:space:]]*[|]?(Pre-)?Depends:[[:space:]]+([^[:space:]()]+).*/\2/p' \
+                    || true)"
             for d in $deps; do
+                case "$d" in ""|\<*) continue ;; esac
                 if [ -z "${seen[$d]:-}" ]; then
                     seen[$d]=1
                     next+=("$d")
@@ -234,13 +238,27 @@ download_kylin_specific() {
 download_verify_baseline() {
     log "downloading verify-baseline fixtures (dbus stack, libselinux1, bash)"
     mkdir -p "$DIST_OUT/verify-baseline"
-    # 极简容器缺口(真实麒麟桌面必有,夹具不进离线包):
+    # 极简容器缺口(真实麒麟桌面必有,夹具不进离线包,仅验证环境预置):
     #   libdbus-1-3/libselinux1 - 黑名单库,被 libavahi-client3/rpm-common/cdebconf 依赖
     #   bash                     - distrotwin kylin base 未装,lrzip 依赖
-    #   dbus+adduser+libaudit1   - dconf-service 的 session-bus 链(gtk 配置需要)
-    # 夹具安装侧同样"只装缺失",绝不覆盖目标机已有版本(零升级红线)
-    ( cd "$DIST_OUT/verify-baseline" && \
-      apt-get download -q libdbus-1-3 libselinux1 bash dbus adduser libaudit1 ) \
+    #   dbus 一族                - dconf-service 的 session-bus 链(gtk 配置需要)
+    # 手工列举 dbus 的依赖是打地鼠(实证漏过 libapparmor1),这里对夹具集做
+    # 无黑名单的完整递归闭包;夹具安装侧"只装缺失",不覆盖容器已有版本。
+    local fnames fd fdl
+    fnames="$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
+                  --no-breaks --no-replaces --no-enhances \
+                  dbus libdbus-1-3 libselinux1 bash adduser libaudit1 \
+              | sed 's/^[[:space:]]*//' \
+              | grep -vE '^(Depends|PreDepends|Conflicts|Breaks|Replaces|Enhances|Suggests|Recommends):' \
+              | grep -vE '^(\||<|>|#|$)' \
+              | sort -u)"
+    fdl=""
+    for fd in $fnames; do
+        apt_has_candidate "$fd" && fdl="$fdl $fd"
+    done
+    [ -n "$fdl" ] || die "verify-baseline fixture set resolved to empty"
+    log "fixture closure:$(printf '%s' "$fdl" | tr ' ' '\n' | wc -l) packages"
+    ( cd "$DIST_OUT/verify-baseline" && apt-get download -q $fdl ) \
         || die "failed to download verify-baseline fixtures"
 }
 
