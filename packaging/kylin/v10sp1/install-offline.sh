@@ -90,21 +90,31 @@ done
 
 if [ "${#TO_INSTALL[@]}" -gt 0 ]; then
     log "installing ${#TO_INSTALL[@]} missing dependency package(s) ..."
-    # 两遍法: 批内包按字母序排列,某包的 Pre-Depends 可能排在它后面
-    # (实证: gawk 先于 libmpfr6 解包 → "pre-dependency problem"),
-    # 第一遍把其余包装完,第二遍重装让时序受害者就位 —— 只装缺失的
-    # 语义不变(所有包均来自缺失清单)。
+    # 安装策略(CI 实证演化):
+    #   dpkg -i 按档案字母序处理 —— 解包期 Pre-Depends 时序(gawk 先于
+    #   libmpfr6)与配置期顺序(dconf-gsettings-backend 先于其依赖的
+    #   dconf-service)都会留下未配置项。两遍 dpkg -i 保证全部解包,
+    #   再用 dpkg --configure -a 按依赖拓扑完成配置;
+    #   最终以"本清单包全部 ii 状态"判定成败,不看 dpkg -i 的中间退出码。
     if ! dpkg -i -- "${TO_INSTALL[@]}" >>"$LOG" 2>&1; then
-        log "first dpkg pass reported errors (expected for pre-depends ordering), retrying once"
-        if ! dpkg -i -- "${TO_INSTALL[@]}" >>"$LOG" 2>&1; then
-            # 失败时把错误上下文回显到控制台,避免细节只存在于易失的日志文件里
-            echo "[engrampa-offline] dpkg -i FAILED. Error context from $LOG:" >&2
-            grep -inE -B2 -A8 'error|fail' "$LOG" | tail -80 >&2 || true
-            echo "[engrampa-offline] dpkg --audit:" >&2
-            dpkg --audit >&2 || true
-            die "dpkg -i failed for dependency closure - see $LOG"
-        fi
-        log "second dpkg pass succeeded"
+        log "first dpkg pass reported errors (expected for ordering), retrying"
+        dpkg -i -- "${TO_INSTALL[@]}" >>"$LOG" 2>&1 || true
+    fi
+    if ! dpkg --configure -a >>"$LOG" 2>&1; then
+        echo "[engrampa-offline] dpkg --configure -a FAILED. Error context from $LOG:" >&2
+        grep -inE -B2 -A8 'error|fail' "$LOG" | tail -80 >&2 || true
+        die "configure stage failed for dependency closure - see $LOG"
+    fi
+    BAD_STATE=""
+    for deb in "${TO_INSTALL[@]}"; do
+        p="$(dpkg-deb -f "$deb" Package)"
+        st="$(dpkg-query -W -f='${Status}' "$p" 2>/dev/null || true)"
+        [ "$st" = "install ok installed" ] || BAD_STATE="$BAD_STATE $p"
+    done
+    if [ -n "$BAD_STATE" ]; then
+        echo "[engrampa-offline] packages not fully configured after install:$BAD_STATE" >&2
+        dpkg --audit >&2 || true
+        die "dependency closure incomplete - see $LOG"
     fi
 else
     log "all main-batch dependency packages already satisfied"
@@ -118,7 +128,10 @@ done
 if [ "${#TO_INSTALL_OBJC[@]}" -gt 0 ] || [ "${#KYLIN_DEBS[@]}" -gt 0 ]; then
     log "installing target-specific batch (${#TO_INSTALL_OBJC[@]} objc-family + ${#KYLIN_DEBS[@]} Kylin debs) ..."
     set -- "${TO_INSTALL_OBJC[@]}" "${KYLIN_DEBS[@]}"
-    if dpkg -i -- "$@" >>"$LOG" 2>&1 || dpkg -i -- "$@" >>"$LOG" 2>&1; then
+    dpkg -i -- "$@" >>"$LOG" 2>&1 || dpkg -i -- "$@" >>"$LOG" 2>&1 || true
+    dpkg --configure -a >>"$LOG" 2>&1 || true
+    UNAR_STATE="$(dpkg-query -W -f='${Status}' unar 2>/dev/null || true)"
+    if [ "$UNAR_STATE" = "install ok installed" ]; then
         log "target-specific batch installed (unar/RAR support active)"
     else
         echo "[engrampa-offline] WARNING: target-specific batch failed on this machine." >&2
@@ -128,7 +141,6 @@ if [ "${#TO_INSTALL_OBJC[@]}" -gt 0 ] || [ "${#KYLIN_DEBS[@]}" -gt 0 ]; then
         log "WARNING: unar/RAR support unavailable on this machine (see above)"
     fi
 fi
-dpkg --configure -a >>"$LOG" 2>&1 || true
 
 # ------------------------------------------------ 应用本体(显式升级意图)
 log "installing engrampa $MAIN_VER (this is the point of this bundle)"
