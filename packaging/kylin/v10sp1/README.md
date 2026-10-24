@@ -42,6 +42,9 @@ glibc 符号版本在**链接期**由构建机 libc 固化进二进制，运行�
 3. **verify-kylin** — 真实麒麟包环境容器 `ghcr.io/distrotwin/kylin:v10sp1-base-arm64-20260903`
    （麒麟公开 apt 归档自举，钉带日期 tag），同一套验证脚本再过一遍——
    验证"闭包包名/版本在真实麒麟上成立"（指南第 5 节要求）。
+   > 极简验证容器比真实麒麟桌面更瘦（缺 `libdbus-1-3`/`libselinux1` 这类桌面必装、
+   > 但按指南进闭包黑名单的库）。构建时另发 `dist/verify-baseline/` 夹具
+   > （不在离线包内），verify 跑安装前先装夹具模拟桌面基线。
 4. **release** — 推 `v*` tag 时上传双 deb + SHA256SUMS。
 
 若将来仓库转私有（无 arm64 runner）：把 `runs-on` 换成 `ubuntu-latest`，在 job 里加

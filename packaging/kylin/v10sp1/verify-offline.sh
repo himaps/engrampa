@@ -43,6 +43,16 @@ SNAP_BEFORE=/tmp/dpkg-before.txt
 dpkg-query -W -f='${Package}\t${Version}\n' 2>/dev/null | sort > "$SNAP_BEFORE" || true
 log "snapshot before: $(wc -l < "$SNAP_BEFORE") packages"
 
+# ---------------------------------------------------------------- 桌面基线夹具
+# 极简容器缺 libdbus-1-3/libselinux1(闭包黑名单项,真实麒麟桌面必装,
+# 且 libavahi-client3/rpm-common/cdebconf 依赖之)。先装夹具模拟桌面基线。
+if [ -d "$DIST_DIR/verify-baseline" ] && ls "$DIST_DIR"/verify-baseline/*.deb >/dev/null 2>&1; then
+    log "provisioning desktop-baseline fixtures (libdbus-1-3, libselinux1)"
+    dpkg -i "$DIST_DIR"/verify-baseline/*.deb || die "baseline fixture install failed"
+else
+    log "WARNING: no verify-baseline fixtures found in $DIST_DIR"
+fi
+
 # ---------------------------------------------------------------- 安装离线包
 log "dpkg -i offline bundle (postinst will print the manual command - no systemd in container)"
 dpkg -i "$OFFLINE_DEB" || die "dpkg -i offline deb failed"

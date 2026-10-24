@@ -143,6 +143,19 @@ download_closure() {
     log "required tool packages verified in cache"
 }
 
+# ------------------------------------------------ 验证环境基线夹具
+# libdbus-1-3 / libselinux1 在黑名单(指南红线,不进离线包),真实麒麟桌面必装;
+# 但极简验证容器(ubuntu:20.04 与 distrotwin base)没有它们,而闭包中
+# libavahi-client3/rpm-common/cdebconf 依赖之。作为验证夹具单独放行:
+# 随产物分发、仅供 verify-offline 预装模拟桌面基线,绝不进入离线 deb。
+download_verify_baseline() {
+    log "downloading verify-baseline fixtures (libdbus-1-3, libselinux1)"
+    mkdir -p "$DIST_OUT/verify-baseline"
+    ( cd "$DIST_OUT/verify-baseline" && \
+      apt-get download -q libdbus-1-3 libselinux1 ) \
+        || die "failed to download verify-baseline fixtures"
+}
+
 # ---------------------------------------------------------------- 组包
 assemble() {
     log "assembling offline deb root"
@@ -207,6 +220,7 @@ selfcheck() {
 
 main() {
     download_closure
+    download_verify_baseline
     assemble
     selfcheck
     log "DONE: $DIST_OUT/engrampa-offline_${VERSION}_${ARCH}.deb"

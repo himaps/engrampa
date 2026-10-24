@@ -59,8 +59,8 @@ jobs:
 
       - name: Show artifacts + checksums
         run: |
-          ls -lh dist/
-          cd dist && sha256sum *.deb > SHA256SUMS && cat SHA256SUMS
+          ls -lh dist/ dist/verify-baseline/
+          cd dist && sha256sum *.deb verify-baseline/*.deb > SHA256SUMS && cat SHA256SUMS
           dpkg-deb -I engrampa_*.deb | sed -n '1,30p'
 
       - name: Upload dist artifacts
@@ -69,6 +69,7 @@ jobs:
           name: engrampa-kylin-v10sp1-arm64
           path: |
             dist/*.deb
+            dist/verify-baseline/*.deb
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 14

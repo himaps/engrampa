@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "mimosa-hook-status/v1",
+  "recordedAt": "2026-10-24T02:14:33.730Z",
+  "sessionId": "session_17a3107a871a781340cb6075ba785c6e",
+  "event": "PostToolUse",
+  "toolName": "Write",
+  "file": "D:\\01软件工具\\专业工具\\engrampa\\.gitattributes",
+  "outcome": "clear",
+  "coverage": "complete",
+  "findingCount": 0,
+  "durationMs": 10,
+  "hostState": "hook_complete",
+  "reportHint": ".mimosa/reports/"
+}

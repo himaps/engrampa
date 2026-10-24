@@ -72,8 +72,12 @@ done
 
 if [ "${#TO_INSTALL[@]}" -gt 0 ]; then
     log "installing ${#TO_INSTALL[@]} missing dependency package(s) ..."
-    dpkg -i -- "${TO_INSTALL[@]}" >>"$LOG" 2>&1 \
-        || die "dpkg -i failed for dependency closure - see $LOG"
+    if ! dpkg -i -- "${TO_INSTALL[@]}" >>"$LOG" 2>&1; then
+        # 失败时把日志尾部回显到控制台,避免细节只存在于易失的日志文件里
+        echo "[engrampa-offline] dpkg -i FAILED, tail of $LOG:" >&2
+        tail -60 "$LOG" >&2 || true
+        die "dpkg -i failed for dependency closure - see $LOG"
+    fi
 else
     log "all dependency packages already satisfied, nothing to install"
 fi
