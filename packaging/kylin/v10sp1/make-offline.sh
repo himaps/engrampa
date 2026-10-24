@@ -304,38 +304,102 @@ $fn"
     die "dbus-x11 not found in any Kylin suite (main/arm64)"
 }
 
-# ------------------------------------------------ 麒麟专属包(libobjc4)
+# ------------------------------------------------ 麒麟专属包(libobjc4 及其闭包)
 # libobjc4(unar/gnustep 链需要)被 GCC-runtime 黑名单排除后,必须从麒麟自家
 # 归档取:麒麟的 libobjc4 钉麒麟的 gcc-10-base,天然自洽;focal 的在麒麟上
-# 因严格等号钉永远装不上。归档/suite/组件来自 distrotwin/kylin 的 v10sp1.conf。
+# 因严格等号钉永远装不上。其依赖闭包同样从麒麟归档解析(实证: libgc1c2 在
+# focal 闭包里因 libobjc4 被黑名单剪枝而不可达),剔除目标机必装的系统基件。
 KYLIN_MIRROR="http://archive.kylinos.cn/kylin/KYLIN-ALL"
-KYLIN_SUITES="10.1-2403-updates 10.1-2203-updates 10.1"
 
 download_kylin_specific() {
-    log "fetching libobjc4 from the Kylin archive"
-    mkdir -p "$CACHE_DIR"
-    local suite idx url ver fn
-    for suite in $KYLIN_SUITES; do
-        url="$KYLIN_MIRROR/dists/$suite/main/binary-arm64/Packages.gz"
-        if curl -sf --retry 4 --retry-delay 15 --max-time 240 -o "$CACHE_DIR/kylin-Packages.gz" "$url"; then
-            # 注意: 索引解压 ~30MB,awk 不得提前 exit(指南红线: SIGPIPE 杀生产端,
-            # pipefail 下整脚本 141 退出,CI 实证)。全量扫描,命中后关标志防重复。
-            ver="$(zcat "$CACHE_DIR/kylin-Packages.gz" \
-                | awk '/^Package: libobjc4$/{f=1;next} f&&/^Version:/{print $2; f=0}' || true)"
-            if [ -n "$ver" ]; then
-                fn="$(zcat "$CACHE_DIR/kylin-Packages.gz" \
-                    | awk '/^Package: libobjc4$/{f=1;next} f&&/^Filename:/{print $2; f=0}' || true)"
-                log "Kylin libobjc4: $ver (suite $suite)"
-                mkdir -p "$DIST_OUT/kylin-debs"
-                ( cd "$DIST_OUT/kylin-debs" && \
-                  curl -sf --retry 3 --max-time 300 -O \
-                    "$KYLIN_MIRROR/$fn" ) \
-                    || die "failed to download Kylin libobjc4"
-                return 0
-            fi
-        fi
+    log "resolving libobjc4 closure from the Kylin archive (10.1 base)"
+    mkdir -p "$CACHE_DIR" "$DIST_OUT/kylin-debs"
+    local comp
+    local -a idxs=()
+    for comp in main universe; do
+        curl -sf --retry 4 --retry-delay 15 --max-time 240 \
+            -o "$CACHE_DIR/kylin-libobjc-idx-$comp.gz" \
+            "$KYLIN_MIRROR/dists/10.1/$comp/binary-arm64/Packages.gz" \
+            && idxs+=("$CACHE_DIR/kylin-libobjc-idx-$comp.gz") \
+            || log "WARNING: Kylin 10.1/$comp index unavailable"
     done
-    die "libobjc4 not found in any Kylin suite (main/arm64)"
+    [ "${#idxs[@]}" -gt 0 ] || die "no Kylin index could be fetched for libobjc4"
+    local fnames fn
+    fnames="$(python3 - "${idxs[@]}" <<'PYEOF' || true
+import gzip, re, sys
+
+# 系统基件:目标机必装,不随包分发(与闭包黑名单同理)
+EXCLUDE = {'gcc-10-base', 'libc6', 'libgcc-s1', 'libstdc++6', 'libsystemd0',
+           'libselinux1', 'libpam0g', 'libpam-modules', 'dbus'}
+
+pkgs = {}
+for path in sys.argv[1:]:
+    for stanza in gzip.open(path, 'rt', encoding='utf-8', errors='replace').read().split('\n\n'):
+        f = {}
+        for line in stanza.splitlines():
+            if ':' in line and not line.startswith(' '):
+                k, v = line.split(':', 1)
+                f[k.strip()] = v.strip()
+        if 'Package' in f and 'Filename' in f:
+            pkgs[f['Package']] = f
+
+def dep_names(depends):
+    out = []
+    for clause in (depends or '').split(','):
+        clause = clause.strip()
+        if not clause:
+            continue
+        for alt in clause.split('|'):
+            name = re.sub(r'\s*\(.*', '', alt).strip().split(':')[0]
+            if name:
+                out.append(name)
+    return out
+
+if 'libobjc4' not in pkgs:
+    sys.exit(1)
+seen, queue, out = {'libobjc4'}, ['libobjc4'], []
+while queue:
+    nxt = []
+    for p in queue:
+        if p not in pkgs:
+            continue
+        out.append(pkgs[p]['Filename'])
+        for d in dep_names(pkgs[p].get('Depends')):
+            if d in EXCLUDE:
+                continue
+            if d not in seen:
+                seen.add(d)
+                nxt.append(d)
+    queue = nxt
+print('\n'.join(out))
+PYEOF
+)" || true
+    [ -n "$fnames" ] || die "libobjc4 not found in the Kylin 10.1 archive"
+    log "Kylin libobjc4 closure: $(printf '%s\n' "$fnames" | wc -l) packages"
+    # 多轮重试(Azure→中国镜像间歇抖动),已下载跳过
+    if ( cd "$DIST_OUT/kylin-debs"
+         round=0
+         pending="$fnames"
+         while [ -n "$pending" ] && [ "$round" -lt 4 ]; do
+             failed=""
+             while read -r fn; do
+                 [ -n "$fn" ] || continue
+                 base="$(basename "$fn")"
+                 [ -f "$base" ] && continue
+                 curl -sf --retry 5 --retry-delay 10 --max-time 240 -O "$KYLIN_MIRROR/$fn" \
+                     || failed="$failed
+$fn"
+             done <<< "$pending"
+             pending="${failed#
+}"
+             round=$((round+1))
+             [ -n "$pending" ] && { echo "download round $round left $(printf '%s' "$pending" | wc -l) file(s)" >&2; sleep 30; }
+         done
+         [ -z "$pending" ]
+         exit $? ); then
+        return 0
+    fi
+    die "failed to download Kylin libobjc4 closure"
 }
 
 # ------------------------------------------------ 验证环境基线夹具
