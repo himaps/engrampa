@@ -1,0 +1,27 @@
+#!/bin/sh
+# engrampa main package postinst
+set -e
+
+# 载荷自检:包体缺失要大声报错,而不是静默跳过后续检查
+if [ ! -x /usr/bin/engrampa ]; then
+    echo "ERROR: /usr/bin/engrampa missing - engrampa package payload is broken!" >&2
+    exit 1
+fi
+
+case "$1" in
+    configure)
+        if command -v glib-compile-schemas >/dev/null 2>&1; then
+            glib-compile-schemas /usr/share/glib-2.0/schemas || true
+        fi
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -qtf /usr/share/icons/hicolor || true
+        elif command -v update-icon-caches >/dev/null 2>&1; then
+            update-icon-caches /usr/share/icons/hicolor || true
+        fi
+        ;;
+esac
+
+exit 0

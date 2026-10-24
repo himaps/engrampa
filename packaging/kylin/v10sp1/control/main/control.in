@@ -1,0 +1,21 @@
+Package: engrampa
+Version: @@VERSION@@
+Architecture: @@ARCH@@
+Maintainer: himaps <himaps@users.noreply.github.com>
+Section: utils
+Priority: optional
+Depends: @@DEPENDS@@
+Recommends: @@RECOMMENDS@@
+Homepage: https://mate-desktop.org
+Description: MATE archive manager for Kylin V10 SP1
+ Engrampa 1.28.5 archive manager, built on the same (Ubuntu 20.04/focal)
+ baseline as Kylin V10 SP1 desktop.
+ .
+ Supports drag-and-drop extraction to file manager/desktop, double-click
+ open (with change write-back into the archive), and auto-unit size
+ display.
+ .
+ External format backends (p7zip, zip/unzip, unar, cpio, ...) are
+ installed on demand via Recommends or by engrampa-offline.
+ 面向银河麒麟 V10 SP1 (arm64) 的 Engrampa 1.28.5 归档管理器。
+ 与目标系统同源构建(Ubuntu 20.04 基线, glibc 2.31)。

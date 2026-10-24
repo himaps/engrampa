@@ -1,0 +1,5 @@
+# 打包脚本与 CI 配置必须保持 LF,可执行位见 git index(--chmod=+x)
+.gitattributes text eol=lf
+packaging/** text eol=lf
+.github/workflows/** text eol=lf
+*.sh text eol=lf

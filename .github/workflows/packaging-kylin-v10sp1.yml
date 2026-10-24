@@ -1,0 +1,141 @@
+name: packaging-kylin-v10sp1
+
+# 面向银河麒麟 V10 SP1 (arm64) 的 engrampa 构建与离线包打包。
+# 基线: ubuntu:20.04 (focal) —— 与麒麟 V10 SP1 同源(glibc 2.31 / GCC 9.3 / 包名一致)。
+# 详见 packaging/kylin/v10sp1/README.md
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+    branches: [master, main]
+    paths:
+      - "src/**"
+      - "data/**"
+      - "caja/**"
+      - "po/**"
+      - "packaging/kylin/v10sp1/**"
+      - ".github/workflows/packaging-kylin-v10sp1.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "data/**"
+      - "caja/**"
+      - "po/**"
+      - "packaging/kylin/v10sp1/**"
+      - ".github/workflows/packaging-kylin-v10sp1.yml"
+
+permissions:
+  contents: write   # tag 推送时发布 release
+
+concurrency:
+  group: packaging-kylin-v10sp1-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build debs (focal arm64)
+    # ubuntu-24.04-arm: GitHub 免费原生 arm64 runner(公开仓库)。
+    # 私有仓库无此 runner 时,参考 README 的 QEMU 方案替换 runs-on。
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ubuntu:20.04
+      # focal 已过标准支持期:镜像内容基本冻结,但仍建议发布时记录 digest
+      # (docker inspect --format='{{index .RepoDigests 0}}' ubuntu:20.04)
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        # 注意: ubuntu:20.04 容器内无 git,submodule 拉不动也无需拉 —— 
+        # build-main.sh 自己按钉住的 SHA 获取 mate-submodules
+
+      - name: Build main engrampa deb
+        run: |
+          bash packaging/kylin/v10sp1/build-main.sh
+
+      - name: Build offline bundle deb
+        run: |
+          bash packaging/kylin/v10sp1/make-offline.sh
+
+      - name: Show artifacts + checksums
+        run: |
+          ls -lh dist/
+          cd dist && sha256sum *.deb > SHA256SUMS && cat SHA256SUMS
+          dpkg-deb -I engrampa_*.deb | sed -n '1,30p'
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: engrampa-kylin-v10sp1-arm64
+          path: |
+            dist/*.deb
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
+
+  verify:
+    name: verify on clean focal container
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ubuntu:20.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (for verify script)
+        uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: engrampa-kylin-v10sp1-arm64
+          path: dist
+
+      - name: Verify offline bundle (install + ldd gate + zero-upgrade assertion)
+        run: |
+          bash packaging/kylin/v10sp1/verify-offline.sh "$PWD/dist"
+
+  verify-kylin:
+    # 指南第 5 节: 在目标系统的真实容器里做最终验证。
+    # distrotwin/kylin 从麒麟公开 apt 归档自举, 包环境即麒麟本尊;
+    # 钉带日期 tag(指南红线: 滚动 tag 会随重建变化)。
+    name: verify on real Kylin V10 SP1 container
+    needs: build
+    runs-on: ubuntu-24.04-arm
+    container:
+      image: ghcr.io/distrotwin/kylin:v10sp1-base-arm64-20260903
+    timeout-minutes: 30
+    steps:
+      - name: Checkout (for verify script)
+        uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: engrampa-kylin-v10sp1-arm64
+          path: dist
+
+      - name: Verify offline bundle on real Kylin (skip xvfb - no Kylin apt access)
+        run: |
+          ENGRAMPA_SKIP_XVFB=1 bash packaging/kylin/v10sp1/verify-offline.sh "$PWD/dist"
+
+  release:
+    name: upload release (on tag)
+    needs: [build, verify, verify-kylin]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: engrampa-kylin-v10sp1-arm64
+          path: dist
+
+      - name: Generate checksums
+        run: |
+          cd dist && sha256sum *.deb > SHA256SUMS && cat SHA256SUMS
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "engrampa $TAG (kylin v10sp1 arm64)" --generate-notes
+          gh release upload "$TAG" dist/*.deb dist/SHA256SUMS --clobber

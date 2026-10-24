@@ -1,0 +1,17 @@
+Package: engrampa-offline
+Version: @@VERSION@@
+Architecture: @@ARCH@@
+Maintainer: himaps <himaps@users.noreply.github.com>
+Section: utils
+Priority: optional
+Homepage: https://mate-desktop.org
+Description: Offline installer bundle for engrampa on Kylin V10 SP1
+ Carries the engrampa main .deb plus the on-demand dependency closure
+ (p7zip-full, zip, unzip, unar, cpio, ... and their recursive
+ dependencies, essential/system packages excluded by blacklist).
+ .
+ The install script /usr/lib/engrampa-offline/install-offline.sh
+ installs ONLY packages missing on the target and never upgrades or
+ replaces anything already installed.
+ 面向离线麒麟 V10 SP1 的 engrampa 安装套件:主包 + 按需依赖闭包。
+ 安装脚本只装缺失包,绝不升级已安装的系统组件。

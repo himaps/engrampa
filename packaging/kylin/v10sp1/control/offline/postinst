@@ -1,0 +1,44 @@
+#!/bin/sh
+# engrampa-offline postinst
+#
+# 红线:dpkg 全程持锁,维护脚本内绝不能嵌套 dpkg -i。
+# 安装脚本通过 systemd-run 延迟 10 秒执行(锁释放后);
+# 无 systemd 时回退为打印手动命令。
+set -e
+
+OFFLINE_DIR=/usr/lib/engrampa-offline
+
+# 载荷自检
+if [ ! -x "$OFFLINE_DIR/install-offline.sh" ]; then
+    echo "ERROR: $OFFLINE_DIR/install-offline.sh missing - engrampa-offline payload is broken!" >&2
+    exit 1
+fi
+if [ ! -d "$OFFLINE_DIR/debs" ] || [ -z "$(ls -A "$OFFLINE_DIR/debs" 2>/dev/null)" ]; then
+    echo "ERROR: $OFFLINE_DIR/debs is empty - dependency closure missing!" >&2
+    exit 1
+fi
+if [ -z "$(ls -A "$OFFLINE_DIR/pkgs" 2>/dev/null)" ]; then
+    echo "ERROR: $OFFLINE_DIR/pkgs is empty - engrampa main .deb missing!" >&2
+    exit 1
+fi
+
+case "$1" in
+    configure)
+        if command -v systemd-run >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+            echo "engrampa-offline: dependency installation scheduled in 10 seconds."
+            echo "  progress: journalctl -u engrampa-offline-install -f"
+            systemd-run --unit=engrampa-offline-install \
+                        --description='engrampa-offline deferred install' \
+                        --collect --on-active=10 \
+                        "$OFFLINE_DIR/install-offline.sh" || {
+                echo "WARNING: systemd-run failed, run manually:" >&2
+                echo "  sudo $OFFLINE_DIR/install-offline.sh" >&2
+            }
+        else
+            echo "engrampa-offline: systemd not available, finish installation manually:"
+            echo "  sudo $OFFLINE_DIR/install-offline.sh"
+        fi
+        ;;
+esac
+
+exit 0

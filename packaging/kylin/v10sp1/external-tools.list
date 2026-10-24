@@ -1,0 +1,25 @@
+# engrampa 运行时需要的外部工具 → Ubuntu 20.04 (focal) 包名映射
+# 格式: <deb包名>|<required|optional>|说明
+#   required: 缺失即构建失败(用户点名必装)
+#   optional: 冷门格式支撑, focal 归档缺失时仅告警并跳过
+#
+# tar/gzip 属系统必装(priority required), dpkg-deb 属 Essential,
+# 均无需进闭包。RAR/RAR5 由 unar 支撑(focal 无非自由 rar 包)。
+p7zip-full|required|7z/7za/7zr: 7z/zip/大量格式的核心后端
+zip|required|zip: 创建 zip
+unzip|required|unzip: 解压 zip
+unar|required|unar/lsar: rar、zoo 等格式
+cpio|required|cpio/rpm/deb 格式的列表与解包
+binutils|optional|ar: deb/ar 格式
+genisoimage|optional|isoinfo: ISO 光盘镜像
+rpm2cpio|optional|rpm2cpio: rpm 格式解包
+xz-utils|optional|xz
+zstd|optional|zstd
+bzip2|optional|bzip2
+lhasa|optional|lha
+arj|optional|arj
+nomarch|optional|arc
+unace|optional|ace
+unalz|optional|alz
+lrzip|optional|lrz
+lzop|optional|lzo
