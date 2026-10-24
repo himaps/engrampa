@@ -203,24 +203,40 @@ download_closure() {
 # 与容器自带 dbus 同源自洽(与 libobjc4 同理)。解析闭包用构建容器里的
 # python3,下载仍走 curl。仅验证夹具,不进离线包。
 download_kylin_fixtures() {
-    log "resolving dbus-x11 fixture closure from the Kylin archive"
+    log "resolving dbus-x11 fixture closure from the Kylin archive (merged indexes)"
     mkdir -p "$CACHE_DIR" "$DIST_OUT/verify-baseline-kylin"
-    local suite idx url fnames fn
-    for suite in $KYLIN_SUITES; do
-        url="$KYLIN_MIRROR/dists/$suite/main/binary-arm64/Packages.gz"
-        curl -sf --max-time 300 -o "$CACHE_DIR/kylin-fix-Packages.gz" "$url" || continue
-        fnames="$(python3 - "$CACHE_DIR/kylin-fix-Packages.gz" <<'PYEOF' || true
+    # 注意: updates 套件(2403/2203)的 Packages 索引是**增量索引**,只含有
+    # 更新的包;且麒麟把系统/安全栈(libpam/libapparmor/libkysec/policycoreutils)
+    # 放在 universe 组件。必须合并 3 套件 × main/universe 共 6 份索引:
+    # base 先载,updates 按新旧覆盖(同包取最新),再解析闭包。
+    local suite comp
+    local -a idxs=()
+    for suite in 10.1 10.1-2203-updates 10.1-2403-updates; do
+        for comp in main universe; do
+            if curl -sf --max-time 300 -o "$CACHE_DIR/kylin-idx-$suite-$comp.gz" \
+                  "$KYLIN_MIRROR/dists/$suite/$comp/binary-arm64/Packages.gz"; then
+                idxs+=("$CACHE_DIR/kylin-idx-$suite-$comp.gz")
+            else
+                log "WARNING: Kylin $suite/$comp index unavailable, continuing without it"
+            fi
+        done
+    done
+    [ "${#idxs[@]}" -gt 0 ] || die "no Kylin suite index could be fetched"
+    local fnames fn
+    fnames="$(python3 - "${idxs[@]}" <<'PYEOF' || true
 import gzip, re, sys
 
 pkgs = {}
-for stanza in gzip.open(sys.argv[1], 'rt', encoding='utf-8', errors='replace').read().split('\n\n'):
-    f = {}
-    for line in stanza.splitlines():
-        if ':' in line and not line.startswith(' '):
-            k, v = line.split(':', 1)
-            f[k.strip()] = v.strip()
-    if 'Package' in f and 'Filename' in f:
-        pkgs[f['Package']] = f
+# 后载覆盖先载: base → 2203 → 2403,同包取最新套件的版本
+for path in sys.argv[1:]:
+    for stanza in gzip.open(path, 'rt', encoding='utf-8', errors='replace').read().split('\n\n'):
+        f = {}
+        for line in stanza.splitlines():
+            if ':' in line and not line.startswith(' '):
+                k, v = line.split(':', 1)
+                f[k.strip()] = v.strip()
+        if 'Package' in f and 'Filename' in f:
+            pkgs[f['Package']] = f
 
 def dep_names(depends):
     out = []
@@ -251,24 +267,22 @@ while queue:
 print('\n'.join(out))
 PYEOF
 )" || true
-        if [ -n "$fnames" ]; then
-            log "Kylin fixture closure (suite $suite): $(printf '%s\n' "$fnames" | wc -l) packages"
-            # 注意: 子壳状态必须 0=成功;此前 ok 语义写反(成功=1)导致子壳以 1
-            # 退出,set -e 在子壳语句处直接杀脚本(下一行的 || die 救不了
-            # 独立语句),CI 表现为无任何报错的静默死亡。
-            if ( cd "$DIST_OUT/verify-baseline-kylin"
-                 while read -r fn; do
-                     [ -n "$fn" ] || continue
-                     curl -sf --retry 3 --max-time 300 -O "$KYLIN_MIRROR/$fn" \
-                         || { echo "download failed: $fn" >&2; exit 1; }
-                 done <<< "$fnames"
-                 exit 0 ); then
-                return 0
-            else
-                die "failed to download Kylin fixture debs"
-            fi
+    if [ -n "$fnames" ]; then
+        log "Kylin fixture closure (merged): $(printf '%s\n' "$fnames" | wc -l) packages"
+        # 注意: 子壳状态必须 0=成功;ok 语义写反会让 set -e 在子壳语句处直接
+        # 杀脚本(下一行的 || die 救不了独立语句),CI 表现为无报错静默死亡。
+        if ( cd "$DIST_OUT/verify-baseline-kylin"
+             while read -r fn; do
+                 [ -n "$fn" ] || continue
+                 curl -sf --retry 3 --max-time 300 -O "$KYLIN_MIRROR/$fn" \
+                     || { echo "download failed: $fn" >&2; exit 1; }
+             done <<< "$fnames"
+             exit 0 ); then
+            return 0
+        else
+            die "failed to download Kylin fixture debs"
         fi
-    done
+    fi
     die "dbus-x11 not found in any Kylin suite (main/arm64)"
 }
 
