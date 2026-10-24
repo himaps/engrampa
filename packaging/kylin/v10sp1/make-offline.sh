@@ -95,6 +95,7 @@ download_closure() {
     local seeds
     seeds="$(seed_packages | sort -u)"
     [ -n "$seeds" ] || die "empty seed set"
+    log "seeds ($(printf '%s\n' $seeds | wc -l)): $(echo $seeds)"
 
     # apt-cache depends --recurse:含 Pre-Depends/Depends 全传递闭包。
     # 输出格式: 关系行("  Depends: foo"/"|Depends: foo")与包名行(缩进的纯名字,
@@ -128,6 +129,22 @@ download_closure() {
     log "closure: $kept packages kept, $skipped_essential blacklisted (essential/system)"
 
     [ "$kept" -gt 0 ] || die "closure resolved to empty set"
+
+    # 断言: 主包的 ELF 依赖必须在闭包里(CI 实证曾整链丢失导致 verify ldd 全红)。
+    # 三态定位: 不在最终清单 → 在 apt-cache 名单里吗(在=被 policy/黑名单过滤,
+    # 不在=递归展开就没带出来)。
+    local dep in_names
+    for dep in $(dpkg-deb -f "$MAIN_DEB" Depends \
+                 | tr ',' '\n' | sed -E 's/\(.*//; s/^[[:space:]]+|[[:space:]]+$//g' | grep -v '^$'); do
+        case "$dep" in
+            libc6) continue ;;   # glibc 黑名单,目标机必装,豁免
+        esac
+        in_names=no
+        case " $names " in *" $dep "*) in_names=yes ;; esac
+        grep -qx "$dep" "$final_list_tmp" \
+            || die "closure lost app dependency '$dep' (in apt-cache recurse output: $in_names)"
+    done
+    log "app ELF dependencies verified in closure"
 
     log "downloading closure (apt-get download)"
     ( cd "$CACHE_DIR" && xargs -a "$final_list_tmp" -r -n 16 -P 4 \
