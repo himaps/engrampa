@@ -205,22 +205,21 @@ download_closure() {
 download_kylin_fixtures() {
     log "resolving dbus-x11 fixture closure from the Kylin archive (merged indexes)"
     mkdir -p "$CACHE_DIR" "$DIST_OUT/verify-baseline-kylin"
-    # 注意: updates 套件(2403/2203)的 Packages 索引是**增量索引**,只含有
-    # 更新的包;且麒麟把系统/安全栈(libpam/libapparmor/libkysec/policycoreutils)
-    # 放在 universe 组件。必须合并 3 套件 × main/universe 共 6 份索引:
-    # base 先载,updates 按新旧覆盖(同包取最新),再解析闭包。
-    local suite comp
+    # 注意: 夹具必须与容器已装版本严格一致(dbus-x11 对 dbus/libdbus-1-3 是
+    # "严格等于"钉版本)。distrotwin v10sp1 容器的 dbus 栈停在 **10.1 基础套件**
+    # (实证: libdbus-1-3@1.12.16-2kylin2.1),合并 updates 取最新(2.3k0.9)反而
+    # 钉不上。因此只合并 10.1 的 main+universe 两份索引(麒麟把系统/安全栈
+    # libpam/libapparmor/libkysec/policycoreutils 放在 universe 组件)。
+    local comp
     local -a idxs=()
-    for suite in 10.1 10.1-2203-updates 10.1-2403-updates; do
-        for comp in main universe; do
-            if curl -sf --retry 4 --retry-delay 15 --max-time 240 \
-                  -o "$CACHE_DIR/kylin-idx-$suite-$comp.gz" \
-                  "$KYLIN_MIRROR/dists/$suite/$comp/binary-arm64/Packages.gz"; then
-                idxs+=("$CACHE_DIR/kylin-idx-$suite-$comp.gz")
-            else
-                log "WARNING: Kylin $suite/$comp index unavailable, continuing without it"
-            fi
-        done
+    for comp in main universe; do
+        if curl -sf --retry 4 --retry-delay 15 --max-time 240 \
+              -o "$CACHE_DIR/kylin-idx-10.1-$comp.gz" \
+              "$KYLIN_MIRROR/dists/10.1/$comp/binary-arm64/Packages.gz"; then
+            idxs+=("$CACHE_DIR/kylin-idx-10.1-$comp.gz")
+        else
+            log "WARNING: Kylin 10.1/$comp index unavailable, continuing without it"
+        fi
     done
     [ "${#idxs[@]}" -gt 0 ] || die "no Kylin suite index could be fetched"
     local fnames fn
