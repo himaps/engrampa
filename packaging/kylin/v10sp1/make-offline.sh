@@ -162,15 +162,13 @@ download_kylin_specific() {
     for suite in $KYLIN_SUITES; do
         url="$KYLIN_MIRROR/dists/$suite/main/binary-arm64/Packages.gz"
         if curl -sf --max-time 300 -o "$CACHE_DIR/kylin-Packages.gz" "$url"; then
-            ver="$(zcat "$CACHE_DIR/kylin-Packages.gz" | awk '
-                /^Package: libobjc4$/ {in_st=1}
-                in_st && /^Version:/  {sub(/^Version: /,""); print; exit}
-            ' || true)"
+            # 注意: 索引解压 ~30MB,awk 不得提前 exit(指南红线: SIGPIPE 杀生产端,
+            # pipefail 下整脚本 141 退出,CI 实证)。全量扫描,命中后关标志防重复。
+            ver="$(zcat "$CACHE_DIR/kylin-Packages.gz" \
+                | awk '/^Package: libobjc4$/{f=1;next} f&&/^Version:/{print $2; f=0}' || true)"
             if [ -n "$ver" ]; then
-                fn="$(zcat "$CACHE_DIR/kylin-Packages.gz" | awk '
-                    /^Package: libobjc4$/ {in_st=1}
-                    in_st && /^Filename:/ {sub(/^Filename: /,""); print; exit}
-                ')"
+                fn="$(zcat "$CACHE_DIR/kylin-Packages.gz" \
+                    | awk '/^Package: libobjc4$/{f=1;next} f&&/^Filename:/{print $2; f=0}' || true)"
                 log "Kylin libobjc4: $ver (suite $suite)"
                 mkdir -p "$DIST_OUT/kylin-debs"
                 ( cd "$DIST_OUT/kylin-debs" && \
