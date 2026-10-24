@@ -90,6 +90,40 @@ seed_packages() {
 }
 
 # --------------------------------------------------------- 闭包展开与下载
+expand_closure() {
+    local seeds="$1"
+    local -A seen=()
+    local -a queue=()
+    local p d deps
+    local out=""
+    for p in $seeds; do
+        [ -n "${seen[$p]:-}" ] && continue
+        seen[$p]=1
+        queue+=("$p")
+    done
+    while [ "${#queue[@]}" -gt 0 ]; do
+        local -a next=()
+        for p in "${queue[@]}"; do
+            apt_has_candidate "$p" || continue
+            is_blacklisted "$p" && continue
+            out="$out $p"
+            deps="$(apt-cache depends --no-recommends --no-suggests --no-conflicts \
+                       --no-breaks --no-replaces --no-enhances "$p" 2>/dev/null \
+                    | sed 's/^[[:space:]]*//' \
+                    | grep -vE '^(Depends|PreDepends|Conflicts|Breaks|Replaces|Enhances|Suggests|Recommends):' \
+                    | grep -vE '^(\||<|>|#|$)' || true)"
+            for d in $deps; do
+                if [ -z "${seen[$d]:-}" ]; then
+                    seen[$d]=1
+                    next+=("$d")
+                fi
+            done
+        done
+        queue=("${next[@]}")
+    done
+    printf '%s\n' $out | sort -u
+}
+
 download_closure() {
     log "expanding recursive dependency closure"
     local seeds
@@ -97,20 +131,13 @@ download_closure() {
     [ -n "$seeds" ] || die "empty seed set"
     log "seeds ($(printf '%s\n' $seeds | wc -l)): $(echo $seeds)"
 
-    # apt-cache depends --recurse:含 Pre-Depends/Depends 全传递闭包。
-    # 输出格式: 关系行("  Depends: foo"/"|Depends: foo")与包名行(缩进的纯名字,
-    # 递归层越深缩进越多)交替 —— 早期版本只 grep 列首会把闭包退化成种子集合。
-    # 剥掉缩进后过滤关系标签行与 <circular> 等标记,剩下的即包名(含备选,备选
-    # 会被后续 policy 检查自然过滤)。
+    # BFS 展开(黑名单感知): apt-cache depends --recurse 不认识黑名单,会把
+    # 黑名单节点(如 systemd)的整棵子树(ntpsec→python3-ntp、adduser...)
+    # 展开后只删节点名本身,垃圾子树留在闭包里(CI 实证: python3-ntp 入包)。
+    # 逐节点 BFS: 无候选(虚拟名)或黑名单的节点不入闭包、其子树也不再展开;
+    # 关系行/缩进处理与 apt-cache depends 输出格式一一对应。
     local names
-    names="$(apt-cache depends --recurse \
-                --no-recommends --no-suggests --no-conflicts \
-                --no-breaks --no-replaces --no-enhances \
-                $seeds \
-             | sed 's/^[[:space:]]*//' \
-             | grep -vE '^(Depends|PreDepends|Conflicts|Breaks|Replaces|Enhances|Suggests|Recommends):' \
-             | grep -vE '^(\||<|>|#|$)' \
-             | sort -u)"
+    names="$(expand_closure "$seeds")"
 
     rm -rf "$CACHE_DIR"; mkdir -p "$CACHE_DIR"
     local kept=0 skipped_essential=0 p
@@ -205,11 +232,15 @@ download_kylin_specific() {
 # libavahi-client3/rpm-common/cdebconf 依赖之。作为验证夹具单独放行:
 # 随产物分发、仅供 verify-offline 预装模拟桌面基线,绝不进入离线 deb。
 download_verify_baseline() {
-    log "downloading verify-baseline fixtures (libdbus-1-3, libselinux1, bash)"
+    log "downloading verify-baseline fixtures (dbus stack, libselinux1, bash)"
     mkdir -p "$DIST_OUT/verify-baseline"
-    # bash: distrotwin kylin base 容器未装 bash(lrzip 依赖它),真机必有
+    # 极简容器缺口(真实麒麟桌面必有,夹具不进离线包):
+    #   libdbus-1-3/libselinux1 - 黑名单库,被 libavahi-client3/rpm-common/cdebconf 依赖
+    #   bash                     - distrotwin kylin base 未装,lrzip 依赖
+    #   dbus+adduser+libaudit1   - dconf-service 的 session-bus 链(gtk 配置需要)
+    # 夹具安装侧同样"只装缺失",绝不覆盖目标机已有版本(零升级红线)
     ( cd "$DIST_OUT/verify-baseline" && \
-      apt-get download -q libdbus-1-3 libselinux1 bash ) \
+      apt-get download -q libdbus-1-3 libselinux1 bash dbus adduser libaudit1 ) \
         || die "failed to download verify-baseline fixtures"
 }
 

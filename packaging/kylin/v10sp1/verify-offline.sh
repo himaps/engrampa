@@ -53,11 +53,26 @@ for cfg in /etc/dpkg/dpkg.cfg /etc/dpkg/dpkg.cfg.d/*; do
 done
 
 # ---------------------------------------------------------------- 桌面基线夹具
-# 极简容器缺 libdbus-1-3/libselinux1(闭包黑名单项,真实麒麟桌面必装,
-# 且 libavahi-client3/rpm-common/cdebconf 依赖之)。先装夹具模拟桌面基线。
+# 极简容器缺 dbus 系/黑名单库(真实麒麟桌面必装)。先装夹具模拟桌面基线。
+# 夹具同样"只装缺失":绝不覆盖容器已有版本(零升级红线,麒麟容器的 dbus
+# 是麒麟版,被 focal 版覆盖会直接毁掉零升级断言)。
 if [ -d "$DIST_DIR/verify-baseline" ] && ls "$DIST_DIR"/verify-baseline/*.deb >/dev/null 2>&1; then
-    log "provisioning desktop-baseline fixtures (libdbus-1-3, libselinux1, bash)"
-    dpkg -i "$DIST_DIR"/verify-baseline/*.deb || die "baseline fixture install failed"
+    FIXES=()
+    for f in "$DIST_DIR"/verify-baseline/*.deb; do
+        fp="$(dpkg-deb -f "$f" Package)"
+        fst="$(dpkg-query -W -f='${Status}' "$fp" 2>/dev/null || true)"
+        if [ "$fst" != "install ok installed" ]; then
+            FIXES+=("$f")
+            log "baseline fixture to install: $fp"
+        fi
+    done
+    if [ "${#FIXES[@]}" -gt 0 ]; then
+        dpkg -i -- "${FIXES[@]}" || dpkg -i -- "${FIXES[@]}" || true
+        dpkg --configure -a || die "baseline fixture configure failed"
+        log "baseline fixtures provisioned (${#FIXES[@]} package(s))"
+    else
+        log "baseline already satisfied, no fixtures needed"
+    fi
 else
     log "WARNING: no verify-baseline fixtures found in $DIST_DIR"
 fi
