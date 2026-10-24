@@ -241,13 +241,16 @@ download_verify_baseline() {
     # 极简容器缺口(真实麒麟桌面必有,夹具不进离线包,仅验证环境预置):
     #   libdbus-1-3/libselinux1 - 黑名单库,被 libavahi-client3/rpm-common/cdebconf 依赖
     #   bash                     - distrotwin kylin base 未装,lrzip 依赖
-    #   dbus 一族                - dconf-service 的 session-bus 链(gtk 配置需要)
-    # 手工列举 dbus 的依赖是打地鼠(实证漏过 libapparmor1),这里对夹具集做
-    # 无黑名单的完整递归闭包;夹具安装侧"只装缺失",不覆盖容器已有版本。
+    #   dbus-x11 一族            - dconf-service 需要 dbus-session-bus 虚拟名,
+    #                              focal 里只有 dbus-x11 / dbus-user-session 提供;
+    #                              前者依赖面干净(无 systemd)。注意 plain dbus
+    #                              不 Provides 该虚拟名(CI 实证装了也白装)
+    # 手工列举依赖是打地鼠(实证漏过 libapparmor1),这里对夹具集做无黑名单的
+    # 完整递归闭包;夹具安装侧"只装缺失",不覆盖容器已有版本。
     local fnames fd fdl
     fnames="$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
                   --no-breaks --no-replaces --no-enhances \
-                  dbus libdbus-1-3 libselinux1 bash adduser libaudit1 \
+                  dbus-x11 libdbus-1-3 libselinux1 bash adduser libaudit1 \
               | sed 's/^[[:space:]]*//' \
               | grep -vE '^(Depends|PreDepends|Conflicts|Breaks|Replaces|Enhances|Suggests|Recommends):' \
               | grep -vE '^(\||<|>|#|$)' \
