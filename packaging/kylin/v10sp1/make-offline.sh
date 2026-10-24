@@ -272,13 +272,31 @@ PYEOF
         log "Kylin fixture closure (merged): $(printf '%s\n' "$fnames" | wc -l) packages"
         # 注意: 子壳状态必须 0=成功;ok 语义写反会让 set -e 在子壳语句处直接
         # 杀脚本(下一行的 || die 救不了独立语句),CI 表现为无报错静默死亡。
+        # Azure→中国镜像间歇抽风(单文件 retry 3 不够覆盖窗口),按失败清单
+        # 多轮重试,已下载的跳过,轮间退避。
         if ( cd "$DIST_OUT/verify-baseline-kylin"
-             while read -r fn; do
-                 [ -n "$fn" ] || continue
-                 curl -sf --retry 3 --max-time 300 -O "$KYLIN_MIRROR/$fn" \
-                     || { echo "download failed: $fn" >&2; exit 1; }
-             done <<< "$fnames"
-             exit 0 ); then
+             round=0
+             pending="$fnames"
+             while [ -n "$pending" ] && [ "$round" -lt 4 ]; do
+                 failed=""
+                 while read -r fn; do
+                     [ -n "$fn" ] || continue
+                     base="$(basename "$fn")"
+                     [ -f "$base" ] && continue
+                     curl -sf --retry 5 --retry-delay 10 --max-time 240 -O "$KYLIN_MIRROR/$fn" \
+                         || failed="$failed
+$fn"
+                 done <<< "$pending"
+                 pending="${failed#
+}"
+                 round=$((round+1))
+                 if [ -n "$pending" ]; then
+                     echo "download round $round left $(printf '%s' "$pending" | wc -l) file(s), backing off" >&2
+                     sleep 30
+                 fi
+             done
+             [ -z "$pending" ]
+             exit $? ); then
             return 0
         else
             die "failed to download Kylin fixture debs"
