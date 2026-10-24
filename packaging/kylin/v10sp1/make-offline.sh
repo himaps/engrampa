@@ -196,6 +196,77 @@ download_closure() {
     log "required tool packages verified in cache"
 }
 
+# ------------------------------------------------ 麒麟归档夹具(dbus-x11)
+# dconf-service 需要 dbus-session-bus 虚拟名(仅 dbus-x11/dbus-user-session
+# 提供)。麒麟容器自带 dbus@麒麟版本,而 dbus-x11 对 dbus 是"严格等于"钉版本
+# ——focal 的 dbus-x11 在麒麟容器上永远配不上(CI 实证),必须取麒麟自家归档,
+# 与容器自带 dbus 同源自洽(与 libobjc4 同理)。解析闭包用构建容器里的
+# python3,下载仍走 curl。仅验证夹具,不进离线包。
+download_kylin_fixtures() {
+    log "resolving dbus-x11 fixture closure from the Kylin archive"
+    mkdir -p "$CACHE_DIR" "$DIST_OUT/verify-baseline-kylin"
+    local suite idx url fnames fn
+    for suite in $KYLIN_SUITES; do
+        url="$KYLIN_MIRROR/dists/$suite/main/binary-arm64/Packages.gz"
+        curl -sf --max-time 300 -o "$CACHE_DIR/kylin-fix-Packages.gz" "$url" || continue
+        fnames="$(python3 - "$CACHE_DIR/kylin-fix-Packages.gz" <<'PYEOF' || true
+import gzip, re, sys
+
+pkgs = {}
+for stanza in gzip.open(sys.argv[1], 'rt', encoding='utf-8', errors='replace').read().split('\n\n'):
+    f = {}
+    for line in stanza.splitlines():
+        if ':' in line and not line.startswith(' '):
+            k, v = line.split(':', 1)
+            f[k.strip()] = v.strip()
+    if 'Package' in f and 'Filename' in f:
+        pkgs[f['Package']] = f
+
+def dep_names(depends):
+    out = []
+    for clause in (depends or '').split(','):
+        clause = clause.strip()
+        if not clause:
+            continue
+        for alt in clause.split('|'):
+            name = re.sub(r'\s*\(.*', '', alt).strip().split(':')[0]
+            if name:
+                out.append(name)
+    return out
+
+if 'dbus-x11' not in pkgs:
+    sys.exit(1)
+seen, queue, out = {'dbus-x11'}, ['dbus-x11'], []
+while queue:
+    nxt = []
+    for p in queue:
+        if p not in pkgs:
+            continue
+        out.append(pkgs[p]['Filename'])
+        for d in dep_names(pkgs[p].get('Depends')):
+            if d not in seen:
+                seen.add(d)
+                nxt.append(d)
+    queue = nxt
+print('\n'.join(out))
+PYEOF
+)" || true
+        if [ -n "$fnames" ]; then
+            log "Kylin fixture closure (suite $suite): $(printf '%s\n' "$fnames" | wc -l) packages"
+            ( cd "$DIST_OUT/verify-baseline-kylin"
+              ok=1
+              while read -r fn; do
+                  [ -n "$fn" ] || continue
+                  curl -sf --retry 3 --max-time 300 -O "$KYLIN_MIRROR/$fn" || { ok=0; echo "download failed: $fn" >&2; break; }
+              done <<< "$fnames"
+              exit $ok )
+            [ $? -eq 0 ] || die "failed to download Kylin fixture debs"
+            return 0
+        fi
+    done
+    die "dbus-x11 not found in any Kylin suite (main/arm64)"
+}
+
 # ------------------------------------------------ 麒麟专属包(libobjc4)
 # libobjc4(unar/gnustep 链需要)被 GCC-runtime 黑名单排除后,必须从麒麟自家
 # 归档取:麒麟的 libobjc4 钉麒麟的 gcc-10-base,天然自洽;focal 的在麒麟上
@@ -241,16 +312,14 @@ download_verify_baseline() {
     # 极简容器缺口(真实麒麟桌面必有,夹具不进离线包,仅验证环境预置):
     #   libdbus-1-3/libselinux1 - 黑名单库,被 libavahi-client3/rpm-common/cdebconf 依赖
     #   bash                     - distrotwin kylin base 未装,lrzip 依赖
-    #   dbus-x11 一族            - dconf-service 需要 dbus-session-bus 虚拟名,
-    #                              focal 里只有 dbus-x11 / dbus-user-session 提供;
-    #                              前者依赖面干净(无 systemd)。注意 plain dbus
-    #                              不 Provides 该虚拟名(CI 实证装了也白装)
-    # 手工列举依赖是打地鼠(实证漏过 libapparmor1),这里对夹具集做无黑名单的
-    # 完整递归闭包;夹具安装侧"只装缺失",不覆盖容器已有版本。
+    # 注意: dbus-x11(session-bus 虚拟名的提供者)不在此列 —— focal 的 dbus-x11
+    # "dbus (= 精确版本)"钉死麒麟自带的 dbus,必须取自麒麟归档(见
+    # download_kylin_fixtures)。这里对夹具集做无黑名单的完整递归闭包;
+    # 夹具安装侧"只装缺失",不覆盖容器已有版本。
     local fnames fd fdl
     fnames="$(apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
                   --no-breaks --no-replaces --no-enhances \
-                  dbus-x11 libdbus-1-3 libselinux1 bash adduser libaudit1 \
+                  libdbus-1-3 libselinux1 bash adduser libaudit1 \
               | sed 's/^[[:space:]]*//' \
               | grep -vE '^(Depends|PreDepends|Conflicts|Breaks|Replaces|Enhances|Suggests|Recommends):' \
               | grep -vE '^(\||<|>|#|$)' \
@@ -336,9 +405,15 @@ selfcheck() {
 main() {
     download_closure
     download_kylin_specific
+    download_kylin_fixtures
     download_verify_baseline
     assemble
     selfcheck
+    # 夹具完整性:验证 job 依赖这两个目录,缺失要在此刻大声报错
+    ls "$DIST_OUT"/verify-baseline/*.deb >/dev/null 2>&1 \
+        || die "verify-baseline fixtures empty"
+    ls "$DIST_OUT"/verify-baseline-kylin/*.deb >/dev/null 2>&1 \
+        || die "verify-baseline-kylin fixtures empty"
     log "DONE: $DIST_OUT/engrampa-offline_${VERSION}_${ARCH}.deb"
     log "cleaning intermediates"
     rm -rf "$CACHE_DIR" "$OFFLINE_ROOT"

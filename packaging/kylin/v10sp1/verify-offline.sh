@@ -57,9 +57,14 @@ done
 # 夹具同样"只装缺失":绝不覆盖容器已有版本(零升级红线,麒麟容器的 dbus
 # 是麒麟版,被 focal 版覆盖会直接毁掉零升级断言)。
 if [ -d "$DIST_DIR/verify-baseline" ] && ls "$DIST_DIR"/verify-baseline/*.deb >/dev/null 2>&1; then
+    # 麒麟目录优先(版本敏感的 dbus 族),同名包去重(取先到者)
     FIXES=()
-    for f in "$DIST_DIR"/verify-baseline/*.deb; do
+    declare -A fp_seen=()
+    for f in "$DIST_DIR"/verify-baseline-kylin/*.deb "$DIST_DIR"/verify-baseline/*.deb; do
+        [ -e "$f" ] || continue
         fp="$(dpkg-deb -f "$f" Package)"
+        [ -n "${fp_seen[$fp]:-}" ] && continue
+        fp_seen[$fp]=1
         fst="$(dpkg-query -W -f='${Status}' "$fp" 2>/dev/null || true)"
         if [ "$fst" != "install ok installed" ]; then
             FIXES+=("$f")
@@ -114,27 +119,17 @@ done
 log "  7z zip unzip unar lsar cpio all present"
 
 log "assert: zero upgrade / zero replace"
+# 注意: ubuntu:20.04 基础镜像不带 python3(CI 实证 command not found),
+# 比对用纯 bash(join/comm 对已排序的 pkg<TAB>version 快照)
 dpkg-query -W -f='${Package}\t${Version}\n' 2>/dev/null | sort > /tmp/dpkg-after.txt || true
-python3 - "$SNAP_BEFORE" /tmp/dpkg-after.txt <<'PYEOF' || die "zero-upgrade assertion FAILED"
-import sys
-def load(p):
-    d = {}
-    for line in open(p, encoding="utf-8"):
-        line = line.rstrip("\n")
-        if "\t" in line:
-            pkg, ver = line.split("\t", 1)
-            d[pkg] = ver
-    return d
-before, after = load(sys.argv[1]), load(sys.argv[2])
-changed = [p for p in before if p in after and before[p] != after[p]]
-removed  = [p for p in before if p not in after]
-new      = [p for p in after if p not in before]
-if changed or removed:
-    print("CHANGED: %s" % ", ".join(changed[:20]))
-    print("REMOVED: %s" % ", ".join(removed[:20]))
-    sys.exit(1)
-print("  new packages: %d, changed: 0, removed: 0" % len(new))
-PYEOF
+CHANGED="$(join -t "$(printf '\t')" -j 1 "$SNAP_BEFORE" /tmp/dpkg-after.txt \
+           | awk -F'\t' '$2 != $3 {print $1}')"
+REMOVED="$(comm -23 <(cut -f1 "$SNAP_BEFORE") <(cut -f1 /tmp/dpkg-after.txt))"
+if [ -n "$CHANGED" ] || [ -n "$REMOVED" ]; then
+    printf 'CHANGED: %s\nREMOVED: %s\n' "$CHANGED" "$REMOVED"
+    die "zero-upgrade assertion FAILED"
+fi
+log "  new packages: $(comm -13 <(cut -f1 "$SNAP_BEFORE") <(cut -f1 /tmp/dpkg-after.txt) | wc -l), changed: 0, removed: 0"
 
 log "assert: schema compiled"
 [ -f /usr/share/glib-2.0/schemas/org.mate.engrampa.gschema.xml ] \
