@@ -105,11 +105,14 @@ gen_depends() {
     local elf
     for elf in "$SRC_ROOT"/pkg-root/usr/bin/engrampa "$SRC_ROOT"/pkg-root/usr/libexec/engrampa/*; do
         [ -f "$elf" ] || continue
-        objdump -p "$elf" | sed -n 's/^ *NEEDED *\([^ ]*\)$/\1/p'
+        objdump -p "$elf" 2>/dev/null | sed -n 's/^ *NEEDED *\([^ ]*\)$/\1/p'
     done | sort -u | while read -r lib; do
-        # 交给 dpkg -S 解析;过滤构建容器内由 -dev 包持有的链接器符号名
-        dpkg -S "$lib" 2>/dev/null | head -1 | cut -d: -f1
-    done | sed 's/:arm64$//' | sort -u || true
+        # 经 ldconfig 缓存把 soname 解析为真实库路径再查属主:
+        # 直接 dpkg -S 按名字匹配会把 -dev 包的文件抢先命中(CI 实证混入
+        # libglib2.0-dev)。NEEDED 均带版本后缀,与 dev 的无版本符号链接不冲突。
+        path="$(ldconfig -p | awk -v lib="$lib" '$1 == lib {print $NF; exit}')"
+        [ -n "$path" ] && dpkg -S "$path" 2>/dev/null | head -1 | cut -d: -f1
+    done | sed 's/:arm64$//' | sort -u | grep -vE -- '-(dev|doc|dbg)$' || true
 }
 
 gen_depends_field() {
@@ -135,7 +138,8 @@ assemble_deb() {
 
     local depends recommends
     depends="$(gen_depends_field)"
-    recommends="$(cut -d'|' -f1 "$SCRIPT_DIR/external-tools.list" | grep -v '^#' | grep -v '^$' | tr '\n' ' ' | sed 's/ *$//')"
+    # dpkg 控制字段语法: 多包必须逗号+空格分隔(空格分隔会 parse error,CI 实证)
+    recommends="$(cut -d'|' -f1 "$SCRIPT_DIR/external-tools.list" | grep -v '^#' | grep -v '^$' | paste -sd, - | sed 's/,/, /g')"
     [ -n "$depends" ] || die "empty Depends - ELF scan failed"
 
     sed -e "s/@@VERSION@@/$VERSION/g" \
