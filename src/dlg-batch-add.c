@@ -463,6 +463,120 @@ volume_toggled_cb (GtkToggleButton *toggle_button,
 	update_sensitivity ((DialogData *) user_data);
 }
 
+/* ---------- 命名设置对话框(模板 + 预设密码,可视化配置入口) ---------- */
+
+static void
+naming_preview_update (GtkEntry  *tmpl_entry,
+		       GtkLabel  *preview_label)
+{
+	const char *tmpl = gtk_entry_get_text (tmpl_entry);
+	char       *expanded;
+
+	expanded = naming_template_expand (tmpl, "file");
+	gtk_label_set_text (preview_label, expanded);
+	g_free (expanded);
+}
+
+static void
+naming_template_entry_changed_cb (GtkEditable *editable,
+				  GtkLabel    *preview_label)
+{
+	naming_preview_update (GTK_ENTRY (editable), preview_label);
+}
+
+static void
+show_naming_settings_dialog (GtkWindow *parent)
+{
+	GtkWidget *dialog;
+	GtkWidget *grid;
+	GtkWidget *tmpl_label;
+	GtkWidget *tmpl_entry;
+	GtkWidget *preview_label_lbl;
+	GtkWidget *preview_label;
+	GtkWidget *pwd_label;
+	GtkWidget *pwd_entry;
+	GtkWidget *hint;
+	GSettings *settings;
+	char      *cur;
+	gint       response;
+
+	dialog = gtk_dialog_new_with_buttons (_("Naming Settings"),
+					      parent,
+					      GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+					      _("_Cancel"), GTK_RESPONSE_CANCEL,
+					      _("_Apply"), GTK_RESPONSE_OK,
+					      NULL);
+	gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
+	gtk_container_set_border_width (GTK_CONTAINER (dialog), 12);
+
+	grid = gtk_grid_new ();
+	gtk_grid_set_row_spacing (GTK_GRID (grid), 6);
+	gtk_grid_set_column_spacing (GTK_GRID (grid), 12);
+	gtk_container_set_border_width (GTK_CONTAINER (grid), 6);
+
+	tmpl_label = gtk_label_new_with_mnemonic (_("_Template:"));
+	gtk_widget_set_halign (tmpl_label, GTK_ALIGN_END);
+	tmpl_entry = gtk_entry_new ();
+	gtk_entry_set_width_chars (GTK_ENTRY (tmpl_entry), 36);
+	gtk_label_set_mnemonic_widget (GTK_LABEL (tmpl_label), tmpl_entry);
+
+	preview_label_lbl = gtk_label_new_with_mnemonic (_("Preview:"));
+	gtk_widget_set_halign (preview_label_lbl, GTK_ALIGN_END);
+	preview_label = gtk_label_new ("");
+	gtk_widget_set_halign (preview_label, GTK_ALIGN_START);
+
+	pwd_label = gtk_label_new_with_mnemonic (_("_Preset password:"));
+	gtk_widget_set_halign (pwd_label, GTK_ALIGN_END);
+	pwd_entry = gtk_entry_new ();
+	gtk_entry_set_visibility (GTK_ENTRY (pwd_entry), FALSE);
+	gtk_entry_set_width_chars (GTK_ENTRY (pwd_entry), 36);
+	gtk_label_set_mnemonic_widget (GTK_LABEL (pwd_label), pwd_entry);
+
+	hint = gtk_label_new (_("${NAME} = file base name (extension stripped, or parent folder for multi-selection); strftime patterns are supported, e.g. ${NAME}【%Y_%m_%d_%H_%M_%S】.zip"));
+	gtk_label_set_line_wrap (GTK_LABEL (hint), TRUE);
+	gtk_widget_set_halign (hint, GTK_ALIGN_START);
+	gtk_label_set_xalign (GTK_LABEL (hint), 0.0);
+	gtk_widget_set_opacity (hint, 0.7);
+
+	gtk_grid_attach (GTK_GRID (grid), tmpl_label,        0, 0, 1, 1);
+	gtk_grid_attach (GTK_GRID (grid), tmpl_entry,        1, 0, 1, 1);
+	gtk_grid_attach (GTK_GRID (grid), preview_label_lbl, 0, 1, 1, 1);
+	gtk_grid_attach (GTK_GRID (grid), preview_label,     1, 1, 1, 1);
+	gtk_grid_attach (GTK_GRID (grid), pwd_label,         0, 2, 1, 1);
+	gtk_grid_attach (GTK_GRID (grid), pwd_entry,         1, 2, 1, 1);
+	gtk_grid_attach (GTK_GRID (grid), hint,              0, 3, 2, 1);
+
+	gtk_box_pack_start (GTK_BOX (gtk_dialog_get_content_area (GTK_DIALOG (dialog))),
+			    grid, TRUE, TRUE, 0);
+
+	settings = g_settings_new (ENGRAMPA_SCHEMA_BATCH_ADD);
+	cur = g_settings_get_string (settings, PREF_BATCH_ADD_NAMING_TEMPLATE);
+	gtk_entry_set_text (GTK_ENTRY (tmpl_entry), cur != NULL ? cur : "");
+	g_free (cur);
+	cur = g_settings_get_string (settings, PREF_BATCH_ADD_DEFAULT_PASSWORD);
+	gtk_entry_set_text (GTK_ENTRY (pwd_entry), cur != NULL ? cur : "");
+	g_free (cur);
+
+	g_signal_connect (tmpl_entry,
+			  "changed",
+			  G_CALLBACK (naming_template_entry_changed_cb),
+			  preview_label);
+	naming_preview_update (GTK_ENTRY (tmpl_entry), GTK_LABEL (preview_label));
+
+	gtk_widget_show_all (GTK_WIDGET (dialog));
+	response = gtk_dialog_run (GTK_DIALOG (dialog));
+
+	if (response == GTK_RESPONSE_OK) {
+		g_settings_set_string (settings, PREF_BATCH_ADD_NAMING_TEMPLATE,
+				       gtk_entry_get_text (GTK_ENTRY (tmpl_entry)));
+		g_settings_set_string (settings, PREF_BATCH_ADD_DEFAULT_PASSWORD,
+				       gtk_entry_get_text (GTK_ENTRY (pwd_entry)));
+	}
+
+	gtk_widget_destroy (dialog);
+	g_object_unref (settings);
+}
+
 /* 去掉最后一个扩展名(BandiZip 的 ${NAME} 语义;对目录名同样适用,
  * 只在单文件场景调用,避免误剥目录名里的点) */
 static char *
@@ -728,6 +842,10 @@ dlg_batch_add_files (FrWindow *window,
 			  "notify::text",
 			  G_CALLBACK (password_entry_notify_text_cb),
 			  data);
+	g_signal_connect_swapped (gtk_builder_get_object (data->builder, "a_naming_settings_button"),
+				  "clicked",
+				  G_CALLBACK (show_naming_settings_dialog),
+				  GET_WINDOW ("dialog"));
 
 	/* Run dialog. */
 

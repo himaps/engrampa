@@ -1951,3 +1951,22 @@ msgstr "直接按命名模板创建压缩包（不显示对话框）"
 
 msgid "Use the preset password when creating the archive"
 msgstr "创建压缩包时使用预设密码"
+
+#: src/dlg-batch-add.c src/ui/batch-add-files.ui
+msgid "Naming Settings"
+msgstr "压缩命名设置"
+
+msgid "Naming template and preset password"
+msgstr "命名模板与预设密码"
+
+msgid "_Template:"
+msgstr "模板(_T)："
+
+msgid "Preview:"
+msgstr "预览："
+
+msgid "_Preset password:"
+msgstr "预设密码(_P)："
+
+msgid "${NAME} = file base name (extension stripped, or parent folder for multi-selection); strftime patterns are supported, e.g. ${NAME}【%Y_%m_%d_%H_%M_%S】.zip"
+msgstr "${NAME} = 文件基名（单文件去扩展名，多选取父目录名）；支持 strftime 时间模式，例如 ${NAME}【%Y_%m_%d_%H_%M_%S】.zip"

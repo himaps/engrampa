@@ -27,3 +27,8 @@ option('cpio',
   value : 'auto',
   description : 'Path to the cpio program'
 )
+
+option('peony-actions',
+  type : 'boolean',
+  value : true,
+  description : 'Build the peony-qt (UKUI) context menu plugin')

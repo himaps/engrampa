@@ -47,6 +47,7 @@ install_build_deps() {
         libglib2.0-dev libgtk-3-dev libjson-glib-dev \
         libsm-dev libice-dev libmagic-dev \
         libcaja-extension-dev \
+        qtbase5-dev qtbase5-dev-tools \
         gettext itstool yelp-tools libxml2-utils \
         || die "failed to install build dependencies"
     # 钉版本的 meson(focal 自带 0.53 与 1.28.5 的 meson 语法存在兼容风险)
@@ -72,6 +73,28 @@ prepare_submodules() {
     timeout 300 git -C "$sub" fetch -q --depth 1 origin "$SUBMODULES_SHA" \
         || die "failed to fetch mate-submodules"
     git -C "$sub" checkout -q FETCH_HEAD
+}
+
+# ------------------------------------------------------- 麒麟 libpeony-dev
+# peony-qt(UKUI)右键插件只需头文件(纯接口实现,不链接 libpeony)。
+# 从麒麟 10.1 归档取 libpeony-dev,解包到 /usr/include 供编译。
+prepare_peony_headers() {
+    log "fetching Kylin libpeony-dev headers (for the peony-qt plugin)"
+    local idx="/tmp/kylin-10.1-main-Packages.gz"
+    curl -sf --retry 4 --retry-delay 15 --max-time 240 -o "$idx" \
+        "http://archive.kylinos.cn/kylin/KYLIN-ALL/dists/10.1/main/binary-arm64/Packages.gz" \
+        || { log "WARNING: Kylin index unavailable, peony plugin will be skipped"; return 0; }
+    local fn
+    fn="$(zcat "$idx" | awk '/^Package: libpeony-dev$/{f=1;next} f&&/^Filename:/{print $2; f=0}' || true)"
+    [ -n "$fn" ] || { log "WARNING: libpeony-dev not in Kylin index, peony plugin will be skipped"; return 0; }
+    curl -sf --retry 5 --retry-delay 10 --max-time 240 -o /tmp/libpeony-dev.deb \
+        "http://archive.kylinos.cn/kylin/KYLIN-ALL/$fn" \
+        || { log "WARNING: libpeony-dev download failed, peony plugin will be skipped"; return 0; }
+    dpkg-deb -x /tmp/libpeony-dev.deb / \
+        || die "failed to extract libpeony-dev headers"
+    log "libpeony-dev headers installed: $(ls /usr/include/peony-qt/menu-plugin-iface.h 2>/dev/null || echo MISSING)"
+    [ -f /usr/include/peony-qt/menu-plugin-iface.h ] \
+        || die "peony headers incomplete after extraction"
 }
 
 # ---------------------------------------------------------------- meson 构建
@@ -206,9 +229,12 @@ selfcheck() {
         /usr/share/engrampa/packages.match \
         /usr/share/man/man1/engrampa.1 \
     ; do
-        # dpkg-deb -c 的路径带 ./ 前缀,按路径后缀+行尾锚定匹配
-        printf '%s\n' "$listing" | grep -- "$path\$" >/dev/null || die "payload self-check: $path NOT in deb"
+        # 注意: 不用 grep -q 于管道(指南红线: SIGPIPE 误杀生产端),grep 全量读取
+        printf '%s\n' "$listing" | grep "/$path\$" >/dev/null || die "payload self-check: $path NOT in deb"
     done
+    # peony-qt 右键插件(麒麟桌面必备件;若头文件缺失被跳过则会在此报缺失)
+    printf '%s\n' "$listing" | grep "peony-extensions/libpeony-menu-plugin-engrampa.so\$" >/dev/null \
+        || log "WARNING: peony-qt menu plugin not in payload (skipped at build?)"
     log "payload self-check passed"
 
     log "glibc gate (baseline $GLIBC_BASELINE)"
@@ -234,6 +260,7 @@ main() {
     configure_apt
     install_build_deps
     prepare_submodules
+    prepare_peony_headers
     run_build
     assemble_deb
     selfcheck

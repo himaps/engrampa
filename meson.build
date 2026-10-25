@@ -133,6 +133,7 @@ subdir('help')
 if build_caja_actions
   subdir('caja')
 endif
+subdir('peony')
 subdir('po')
 subdir('src')
 

@@ -141,7 +141,9 @@ focal 归档缺哪个就告警跳过。RAR/RAR5 由 `unar` 支撑（focal 无非
 
 ## 命名模板与预设密码（新增功能）
 
-两项功能均通过 gsettings 配置（dconf 明文存储，密码项注意保密场景）：
+**可视化配置**：批量压缩对话框中名称输入框旁有"命名设置"图标按钮（⚙），
+打开即可编辑模板与预设密码，模板输入时下方**实时预览**展开效果；
+等价的命令行配置（脚本/批量部署用）：
 
 ```bash
 # 命名模板: ${NAME}=基名(单文件去源扩展名/多选取父目录名),
@@ -157,10 +159,11 @@ gsettings set org.mate.engrampa.dialogs.batch-add default-password '你的密码
 
 - 对话框（任意文件管理器的"压缩"入口）：默认文件名按模板展开；
   模板自带已知扩展名时格式下拉自动跟随，确认时不会重复追加扩展名；
-- 右键菜单（caja/含 caja 的环境，本包已构建扩展模块）新增两项：
+- 右键菜单一步到位两项，**caja 与 peony(UKUI 默认文件管理器)都支持**：
   - **压缩为 <模板展开名>**——不弹对话框，一步到位创建；
   - **压缩为加密压缩文件**——使用预设密码一步到位（未配置预设密码或
     目标已存在时自动回退到对话框由用户确认）；
-- peony（麒麟默认文件管理器）调用的是 `engrampa --add` 对话框路径，
-  模板/密码预填对其同样生效；一步到位右键项需要 peony 扩展支持，暂未提供。
+  - 实现形态：caja 走 `libcaja-engrampa.so` 扩展；peony 走 Qt5 插件
+    `libpeony-menu-plugin-engrampa.so`（`/usr/lib/<arch>/peony-extensions/`，
+    构建时从麒麟归档的 libpeony-dev 取头文件编译，纯接口实现不链接 libpeony）；
 - 对应 CLI：`engrampa --instant-add [--encrypt] <文件...>`（自定义集成用）。
