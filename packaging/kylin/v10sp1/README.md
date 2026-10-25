@@ -136,5 +136,31 @@ focal 归档缺哪个就告警跳过。RAR/RAR5 由 `unar` 支撑（focal 无非
 - ✅ 打开压缩包后选中文件**拖拽到桌面/文件夹**（XDS 协议，`fr-window.c`）；
 - ✅ **双击打开**包内文件（解压到临时目录 + 默认程序 + 修改回写询问，`dlg-update.c`）；
 - ✅ 大小列**自动单位**显示（`g_format_size`）；
-- ⚠️ 压缩密码：新建/批量压缩对话框已可手动输入，"默认密码/记住密码"需另行开发；
-- ❌ BandiZip 式命名模板（`xxx【YYYYMMDDHHMMSS】.zip`）需另行开发。
+- ✅ **压缩密码**：手动输入（原有）+ **预设密码**（新增，WinRAR 式，见下节）；
+- ✅ **BandiZip 式命名模板**（新增，见下节）。
+
+## 命名模板与预设密码（新增功能）
+
+两项功能均通过 gsettings 配置（dconf 明文存储，密码项注意保密场景）：
+
+```bash
+# 命名模板: ${NAME}=基名(单文件去源扩展名/多选取父目录名),
+# 其余按 strftime 展开。示例即 BandiZip 同款:
+gsettings set org.mate.engrampa.dialogs.batch-add naming-template \
+    '${NAME}【%Y_%m_%d_%H_%M_%S】.zip'
+
+# 预设密码: "压缩为加密压缩文件"一步到位项与对话框预填共用
+gsettings set org.mate.engrampa.dialogs.batch-add default-password '你的密码'
+```
+
+模板行为（与 BandiZip 对齐）：
+
+- 对话框（任意文件管理器的"压缩"入口）：默认文件名按模板展开；
+  模板自带已知扩展名时格式下拉自动跟随，确认时不会重复追加扩展名；
+- 右键菜单（caja/含 caja 的环境，本包已构建扩展模块）新增两项：
+  - **压缩为 <模板展开名>**——不弹对话框，一步到位创建；
+  - **压缩为加密压缩文件**——使用预设密码一步到位（未配置预设密码或
+    目标已存在时自动回退到对话框由用户确认）；
+- peony（麒麟默认文件管理器）调用的是 `engrampa --add` 对话框路径，
+  模板/密码预填对其同样生效；一步到位右键项需要 peony 扩展支持，暂未提供。
+- 对应 CLI：`engrampa --instant-add [--encrypt] <文件...>`（自定义集成用）。

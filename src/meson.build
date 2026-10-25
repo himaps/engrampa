@@ -50,6 +50,7 @@ source_files = files(
   'gtk-utils.c',
   'java-utils.c',
   'main.c',
+  'naming-template.c',
   'open-file.c',
   'preferences.c',
   'rar-utils.c'

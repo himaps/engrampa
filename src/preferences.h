@@ -75,6 +75,8 @@
 #define PREF_ADD_NO_SYMLINKS		"no-symlinks"
 
 #define PREF_BATCH_ADD_DEFAULT_EXTENSION "default-extension"
+#define PREF_BATCH_ADD_NAMING_TEMPLATE  "naming-template"
+#define PREF_BATCH_ADD_DEFAULT_PASSWORD "default-password"
 #define PREF_BATCH_ADD_OTHER_OPTIONS	 "other-options"
 #define PREF_BATCH_ADD_VOLUME_SIZE	 "volume-size"
 

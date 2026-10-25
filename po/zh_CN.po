@@ -1932,3 +1932,22 @@ msgstr "更新(_U)"
 #: src/ui/update.ui:305
 msgid "S_elect the files you want to update:"
 msgstr "选择您要更新的文件(_E)："
+
+#: caja/caja-engrampa.c src/main.c
+msgid "Compress to %s"
+msgstr "压缩为 %s"
+
+msgid "Compress to Encrypted Archive"
+msgstr "压缩为加密压缩文件"
+
+msgid "Create an archive named from the naming template, without a dialog"
+msgstr "按命名模板直接创建压缩包，不弹出对话框"
+
+msgid "Create an archive with the preset password, without a dialog"
+msgstr "使用预设密码直接创建加密压缩包，不弹出对话框"
+
+msgid "Create the archive directly, applying the naming template, without showing a dialog"
+msgstr "直接按命名模板创建压缩包（不显示对话框）"
+
+msgid "Use the preset password when creating the archive"
+msgstr "创建压缩包时使用预设密码"

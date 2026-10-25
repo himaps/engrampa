@@ -189,6 +189,16 @@
     <key name="default-extension" type="s">
       <default>'.tar.gz'</default>
     </key>
+    <key name="naming-template" type="s">
+      <default>'${NAME}'</default>
+      <summary>Archive naming template</summary>
+      <description>Template for the default archive name. ${NAME} is replaced by the base name of the selection (file name without its extension, or the parent folder name for a multi-selection); strftime patterns such as %Y, %m, %d, %H, %M_%S are expanded with the current time. Example: ${NAME}【%Y_%m_%d_%H_%M_%S】.zip</description>
+    </key>
+    <key name="default-password" type="s">
+      <default>''</default>
+      <summary>Preset archive password</summary>
+      <description>Password used by the "Compress to Encrypted Archive" action and pre-filled in the add dialog. Stored in plain text inside dconf; set it with: gsettings set org.mate.engrampa.dialogs.batch-add default-password 'SECRET'</description>
+    </key>
     <key name="other-options" type="b">
       <default>false</default>
     </key>

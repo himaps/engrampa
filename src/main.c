@@ -36,6 +36,8 @@
 static char **remaining_args;
 static char  *add_to = NULL;
 static int    add;
+static int    instant_add;
+static int    encrypt_add;
 static char  *extract_to = NULL;
 static int    extract;
 static int    extract_here;
@@ -58,6 +60,14 @@ static const GOptionEntry options[] = {
 
 	{ "add", 'd', 0, G_OPTION_ARG_NONE, &add,
 	  N_("Add files asking the name of the archive and quit the program"),
+	  NULL },
+
+	{ "instant-add", '\0', 0, G_OPTION_ARG_NONE, &instant_add,
+	  N_("Create the archive directly, applying the naming template, without showing a dialog"),
+	  NULL },
+
+	{ "encrypt", '\0', 0, G_OPTION_ARG_NONE, &encrypt_add,
+	  N_("Use the preset password when creating the archive"),
 	  NULL },
 
 	{ "extract-to", 'e', 0, G_OPTION_ARG_STRING, &extract_to,
@@ -158,7 +168,7 @@ prepare_app (void)
 	if (add_to != NULL)
 		add_to_uri = get_uri_from_command_line (add_to);
 
-	if ((add_to != NULL) || (add == 1)) { /* Add files to an archive */
+	if ((add_to != NULL) || (add == 1) || (instant_add == 1)) { /* Add files to an archive */
 		GtkWidget   *window;
 		GList       *file_list = NULL;
 		const char  *filename;
@@ -167,6 +177,12 @@ prepare_app (void)
 		window = fr_window_new ();
 		if (default_url != NULL)
 			fr_window_set_default_dir (FR_WINDOW (window), default_url, TRUE);
+
+		/* 即时模式标志(供批量压缩入口读取;见 dlg-batch-add.c) */
+		g_object_set_data (G_OBJECT (window), "engrampa-batch-instant",
+				   GINT_TO_POINTER (instant_add));
+		g_object_set_data (G_OBJECT (window), "engrampa-batch-encrypt",
+				   GINT_TO_POINTER (encrypt_add));
 
 		while ((filename = remaining_args[i++]) != NULL)
 			file_list = g_list_prepend (file_list, get_uri_from_command_line (filename));

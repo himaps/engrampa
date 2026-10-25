@@ -23,6 +23,7 @@
 
 #include <config.h>
 #include <string.h>
+#include <time.h>
 #include <glib/gi18n-lib.h>
 #include <gio/gio.h>
 #include <libcaja-extension/caja-extension-types.h>
@@ -134,6 +135,158 @@ add_callback (CajaMenuItem *item,
 	g_spawn_command_line_async (cmd->str, NULL);
 
 	g_string_free (cmd, TRUE);
+}
+
+/* --instant-add [--encrypt]: 一步到位压缩(BandiZip 式模板命名 /
+ * WinRAR 式预设密码),实现见 engrampa 的 dlg-batch-add.c */
+static void
+add_instant_callback (CajaMenuItem *item,
+		      gpointer      user_data)
+{
+	GList     *files, *scan;
+	gboolean   encrypt = GPOINTER_TO_INT (user_data);
+	char      *uri, *dir, *quoted_dir;
+	GString   *cmd;
+
+	files = g_object_get_data (G_OBJECT (item), "files");
+	uri = caja_file_info_get_uri (files->data);
+	dir = g_path_get_dirname (uri);
+	quoted_dir = g_shell_quote (dir);
+
+	cmd = g_string_new ("engrampa");
+	g_string_append_printf (cmd, " --default-dir=%s --instant-add", quoted_dir);
+	if (encrypt)
+		g_string_append (cmd, " --encrypt");
+
+	g_free (uri);
+	g_free (dir);
+	g_free (quoted_dir);
+
+	for (scan = files; scan; scan = scan->next) {
+		char *quoted_uri;
+
+		uri = caja_file_info_get_uri (scan->data);
+		quoted_uri = g_shell_quote (uri);
+		g_string_append_printf (cmd, " %s", quoted_uri);
+		g_free (uri);
+		g_free (quoted_uri);
+	}
+
+	g_spawn_command_line_async (cmd->str, NULL);
+
+	g_string_free (cmd, TRUE);
+}
+
+/* ---- 一步到位压缩的菜单标签支持:与 src/naming-template.c 同义的
+ * 小型展开(扩展模块独立编译,不便链接主程序源文件) ---- */
+
+static gboolean
+is_strftime_spec_char (char c)
+{
+	return (c != '\0')
+		&& (strchr ("aAbBcCdDeEFgGhHIjklmMnprRsStTuUVwWxXyYzZ+%", c) != NULL);
+}
+
+static char *
+naming_template_expand (const char  *template,
+			const char  *name)
+{
+	GString    *timed;
+	GString    *final_str;
+	const char *p;
+	const char *q;
+	const char *hit;
+	time_t      now;
+	struct tm   tm_now;
+
+	if ((template == NULL) || (*template == '\0'))
+		return g_strdup (name != NULL ? name : "");
+
+	now = time (NULL);
+	localtime_r (&now, &tm_now);
+
+	timed = g_string_sized_new (strlen (template) + 32);
+	for (p = template; *p != '\0'; p++) {
+		if ((*p == '%') && is_strftime_spec_char (p[1])) {
+			char fmt[3];
+			char buf[128];
+
+			fmt[0] = '%';
+			fmt[1] = p[1];
+			fmt[2] = '\0';
+			if (strftime (buf, sizeof (buf), fmt, &tm_now) > 0) {
+				g_string_append (timed, buf);
+				p++;
+			}
+			else
+				g_string_append_c (timed, *p);
+		}
+		else
+			g_string_append_c (timed, *p);
+	}
+
+	final_str = g_string_sized_new (timed->len + strlen (name != NULL ? name : ""));
+	q = timed->str;
+	while ((hit = strstr (q, "${NAME}")) != NULL) {
+		g_string_append_len (final_str, q, hit - q);
+		if (name != NULL)
+			g_string_append (final_str, name);
+		q = hit + strlen ("${NAME}");
+	}
+	g_string_append (final_str, q);
+
+	g_string_free (timed, TRUE);
+	return g_string_free (final_str, FALSE);
+}
+
+/* ${NAME} 的语义与主程序一致: 单文件取基名去扩展名,多选取父目录名 */
+static char *
+selection_base_name (GList *files)
+{
+	char *uri;
+	char *name;
+	char *dot;
+
+	uri = caja_file_info_get_uri (files->data);
+	if (files->next != NULL) {
+		char *dir = g_path_get_dirname (uri);
+		name = g_path_get_basename (dir);
+		g_free (dir);
+	}
+	else
+		name = g_path_get_basename (uri);
+	g_free (uri);
+
+	if (files->next == NULL) {
+		dot = strrchr (name, '.');
+		if ((dot != NULL) && (dot != name) && (strlen (dot) < 10)) {
+			char *stripped = g_strndup (name, dot - name);
+			g_free (name);
+			name = stripped;
+		}
+	}
+
+	return name;
+}
+
+/* 模板名若不带任何已知压缩扩展名,展示时补上默认扩展名 */
+static const char *known_archive_exts[] = {
+	".zip", ".7z", ".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz",
+	".tar.bz2", ".tbz2", ".tar.lz", ".tar.lzma", ".tar.Z", ".rar",
+	".lzh", ".lha", ".arj", ".zoo", ".cpio", ".rpm", ".deb", NULL
+};
+
+static char *
+preview_archive_name (const char *expanded,
+		      const char *default_ext)
+{
+	int i;
+
+	for (i = 0; known_archive_exts[i] != NULL; i++) {
+		if (g_str_has_suffix (expanded, known_archive_exts[i]))
+			return g_strdup (expanded);
+	}
+	return g_strconcat (expanded, default_ext, NULL);
 }
 
 static struct {
@@ -374,6 +527,57 @@ caja_fr_get_file_items (CajaMenuProvider *provider,
 					(GDestroyNotify) caja_file_info_list_free);
 
 		items = g_list_append (items, item);
+
+		/* 一步到位两项: 按命名模板直接压缩 / 加密压缩(预设密码)。
+		 * 标签随当前选择实时展开模板(如"压缩为 报告【2026_10_25_21_49_32】.zip")。 */
+		{
+			GSettings *settings;
+			char      *tmpl, *def_ext, *base, *expanded, *preview, *label;
+
+			settings = g_settings_new ("org.mate.engrampa.dialogs.batch-add");
+			tmpl = g_settings_get_string (settings, "naming-template");
+			def_ext = g_settings_get_string (settings, "default-extension");
+			base = selection_base_name (files);
+			expanded = naming_template_expand (tmpl, base);
+			preview = preview_archive_name (expanded, def_ext);
+
+			label = g_strdup_printf (_("Compress to %s"), preview);
+			item = caja_menu_item_new ("CajaFr::add_template",
+						   label,
+						   _("Create an archive named from the naming template, without a dialog"),
+						   "package-x-generic");
+			g_free (label);
+			g_signal_connect (item,
+					  "activate",
+					  G_CALLBACK (add_instant_callback),
+					  GINT_TO_POINTER (FALSE));
+			g_object_set_data_full (G_OBJECT (item),
+						"files",
+						caja_file_info_list_copy (files),
+						(GDestroyNotify) caja_file_info_list_free);
+			items = g_list_append (items, item);
+
+			item = caja_menu_item_new ("CajaFr::add_encrypted",
+						   _("Compress to Encrypted Archive"),
+						   _("Create an archive with the preset password, without a dialog"),
+						   "package-x-generic");
+			g_signal_connect (item,
+					  "activate",
+					  G_CALLBACK (add_instant_callback),
+					  GINT_TO_POINTER (TRUE));
+			g_object_set_data_full (G_OBJECT (item),
+						"files",
+						caja_file_info_list_copy (files),
+						(GDestroyNotify) caja_file_info_list_free);
+			items = g_list_append (items, item);
+
+			g_free (preview);
+			g_free (expanded);
+			g_free (base);
+			g_free (tmpl);
+			g_free (def_ext);
+			g_object_unref (settings);
+		}
 	}
 
 	return items;

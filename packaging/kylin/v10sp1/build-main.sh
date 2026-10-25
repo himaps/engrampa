@@ -46,6 +46,7 @@ install_build_deps() {
         python3-pip \
         libglib2.0-dev libgtk-3-dev libjson-glib-dev \
         libsm-dev libice-dev libmagic-dev \
+        libcaja-extension-dev \
         gettext itstool yelp-tools libxml2-utils \
         || die "failed to install build dependencies"
     # 钉版本的 meson(focal 自带 0.53 与 1.28.5 的 meson 语法存在兼容风险)
@@ -77,14 +78,14 @@ prepare_submodules() {
 run_build() {
     log "meson setup + ninja"
     rm -rf "$SRC_ROOT/build"
-    # -Dcaja-actions=false: 麒麟 V10 文件管理器是 peony(右键仍调 engrampa CLI),
-    #   构建 caja 扩展会无谓引入 libcaja-extension 依赖
+    # -Dcaja-actions=true: 右键菜单扩展(压缩为<模板名>/加密压缩),麒麟主源
+    #   自带 caja 与 libcaja-extension1;未装 caja 的机器上扩展模块闲置无害
     # -Dpackagekit=false:   麒麟走自己的软件商店体系
     # 注意: focal 的 python3.8 argparse 对"选项之后跟 sourcedir 位置参数"会报
     # unrecognized arguments(CI 实证),故用规范形式: cwd=源码目录,只传 builddir
     ( cd "$SRC_ROOT" && \
       meson setup "$SRC_ROOT/build" --prefix=/usr --buildtype=release \
-        -Dcaja-actions=false -Dpackagekit=false \
+        -Dcaja-actions=true -Dpackagekit=false \
     ) || die "meson setup failed"
     ninja -C "$SRC_ROOT/build" || die "ninja failed"
 
@@ -104,7 +105,11 @@ MIN_VERSIONS='libc6:2.31 libglib2.0-0:2.50 libgtk-3-0:3.22 libjson-glib-1.0-0:0.
 
 gen_depends() {
     local elf
-    for elf in "$SRC_ROOT"/pkg-root/usr/bin/engrampa "$SRC_ROOT"/pkg-root/usr/libexec/engrampa/*; do
+    # 含 caja 扩展模块(启用 caja-actions 后的 libcaja-engrampa.so,
+    # 其运行时依赖 libcaja-extension1 需进 Depends/闭包)
+    for elf in "$SRC_ROOT"/pkg-root/usr/bin/engrampa \
+               "$SRC_ROOT"/pkg-root/usr/libexec/engrampa/* \
+               "$SRC_ROOT"/pkg-root/usr/lib/*/caja/extensions*/*.so ; do
         [ -f "$elf" ] || continue
         objdump -p "$elf" 2>/dev/null | sed -n 's/^ *NEEDED *\([^ ]*\)$/\1/p'
     done | sort -u | while read -r lib; do

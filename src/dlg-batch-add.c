@@ -32,6 +32,7 @@
 #include "fr-window.h"
 #include "gtk-utils.h"
 #include "glib-utils.h"
+#include "naming-template.h"
 #include "preferences.h"
 #include "typedefs.h"
 
@@ -280,7 +281,10 @@ add_clicked_cb (GtkWidget  *widget,
 
 	archive_ext = get_ext (data);
 	tmp = archive_name;
-	archive_name = g_strconcat (tmp, archive_ext, NULL);
+	if (g_str_has_suffix (archive_name, archive_ext))
+		archive_name = g_strdup (tmp);   /* 模板已带该扩展名,不重复追加 */
+	else
+		archive_name = g_strconcat (tmp, archive_ext, NULL);
 	g_free (tmp);
 	archive_file = g_strconcat (archive_dir, "/", archive_name, NULL);
 
@@ -459,6 +463,152 @@ volume_toggled_cb (GtkToggleButton *toggle_button,
 	update_sensitivity ((DialogData *) user_data);
 }
 
+/* 去掉最后一个扩展名(BandiZip 的 ${NAME} 语义;对目录名同样适用,
+ * 只在单文件场景调用,避免误剥目录名里的点) */
+static char *
+name_without_ext (const char *name)
+{
+	const char *ext;
+
+	if ((name == NULL) || (name[0] == '\0'))
+		return g_strdup (name != NULL ? name : "");
+
+	ext = strrchr (name, '.');
+	if ((ext != NULL) && (ext != name) && (strlen (ext) < 10))
+		return g_strndup (name, ext - name);
+	return g_strdup (name);
+}
+
+/* 按扩展名查该格式的能力(加密/加密文件头) */
+static void
+type_caps_for_ext (const char *ext,
+		   gboolean   *can_encrypt,
+		   gboolean   *can_encrypt_header)
+{
+	int i;
+
+	*can_encrypt = FALSE;
+	*can_encrypt_header = FALSE;
+	for (i = 0; save_type[i] != -1; i++) {
+		const char *e = mime_type_desc[save_type[i]].default_ext;
+		if ((e != NULL) && (g_str_has_suffix (ext, e) || strcmp (ext, e) == 0)) {
+			*can_encrypt = mime_type_desc[save_type[i]].capabilities & FR_COMMAND_CAN_ENCRYPT;
+			*can_encrypt_header = mime_type_desc[save_type[i]].capabilities & FR_COMMAND_CAN_ENCRYPT_HEADER;
+			return;
+		}
+	}
+}
+
+/*
+ * 即时压缩(BandiZip 式"压缩为 xxx"): 不弹对话框,按命名模板生成名字,
+ * 必要时使用预设密码(WinRAR 式),直接创建压缩包。
+ * 无预设密码或目标已存在时回退到对话框,由用户手动确认。
+ */
+static void
+batch_add_instant (FrWindow *window,
+		   GList    *file_list,
+		   gboolean  encrypt)
+{
+	GSettings *settings;
+	char      *first_filename;
+	char      *parent = NULL;
+	char      *base_raw = NULL;
+	char      *base = NULL;
+	char      *tmpl = NULL;
+	char      *name = NULL;
+	char      *default_ext = NULL;
+	char      *archive_file = NULL;
+	gboolean   has_known_ext = FALSE;
+	gboolean   can_encrypt = FALSE;
+	gboolean   can_encrypt_header = FALSE;
+	char      *pwd = NULL;
+	int        i;
+
+	settings = g_settings_new (ENGRAMPA_SCHEMA_BATCH_ADD);
+
+	if (encrypt) {
+		pwd = g_settings_get_string (settings, PREF_BATCH_ADD_DEFAULT_PASSWORD);
+		if ((pwd == NULL) || (*pwd == '\0')) {
+			/* 未配置预设密码 → 回退对话框 */
+			g_free (pwd);
+			g_object_unref (settings);
+			dlg_batch_add_files (window, file_list);
+			return;
+		}
+	}
+
+	first_filename = (char*) file_list->data;
+	parent = remove_level_from_path (first_filename);
+
+	if (file_list->next == NULL)
+		base_raw = g_uri_unescape_string (file_name_from_path (first_filename), NULL);
+	else {
+		base_raw = g_uri_unescape_string (file_name_from_path (parent), NULL);
+		if ((base_raw == NULL) || (base_raw[0] == '\0')) {
+			g_free (base_raw);
+			base_raw = g_uri_unescape_string (file_name_from_path (first_filename), NULL);
+		}
+	}
+	base = (file_list->next == NULL) ? name_without_ext (base_raw) : g_strdup (base_raw);
+	g_free (base_raw);
+
+	tmpl = g_settings_get_string (settings, PREF_BATCH_ADD_NAMING_TEMPLATE);
+	name = naming_template_expand (tmpl, base);
+	g_free (tmpl);
+	g_free (base);
+
+	/* 模板自带已知扩展名则原样使用,否则追加默认扩展名 */
+	default_ext = g_settings_get_string (settings, PREF_BATCH_ADD_DEFAULT_EXTENSION);
+	for (i = 0; save_type[i] != -1; i++) {
+		const char *ext = mime_type_desc[save_type[i]].default_ext;
+		if ((ext != NULL) && g_str_has_suffix (name, ext)) {
+			has_known_ext = TRUE;
+			break;
+		}
+	}
+	if (has_known_ext)
+		archive_file = g_strconcat (parent, "/", name, NULL);
+	else
+		archive_file = g_strconcat (parent, "/", name, default_ext, NULL);
+
+	if (uri_exists (archive_file)) {
+		/* 目标已存在 → 回退对话框由用户决定覆盖 */
+		g_free (archive_file);
+		g_free (default_ext);
+		g_free (name);
+		g_free (parent);
+		g_free (pwd);
+		g_object_unref (settings);
+		dlg_batch_add_files (window, file_list);
+		return;
+	}
+
+	if (pwd != NULL) {
+		type_caps_for_ext (has_known_ext ? name : default_ext,
+				   &can_encrypt, &can_encrypt_header);
+		if (can_encrypt) {
+			GSettings *general;
+
+			fr_window_set_password (window, pwd);
+			if (can_encrypt_header) {
+				general = g_settings_new (ENGRAMPA_SCHEMA_GENERAL);
+				fr_window_set_encrypt_header (window,
+					g_settings_get_boolean (general, PREF_GENERAL_ENCRYPT_HEADER));
+				g_object_unref (general);
+			}
+		}
+	}
+
+	fr_window_archive_new (window, archive_file);
+
+	g_free (archive_file);
+	g_free (default_ext);
+	g_free (name);
+	g_free (parent);
+	g_free (pwd);
+	g_object_unref (settings);
+}
+
 void
 dlg_batch_add_files (FrWindow *window,
 		     GList    *file_list)
@@ -473,6 +623,17 @@ dlg_batch_add_files (FrWindow *window,
 
 	if (file_list == NULL)
 		return;
+
+	/* 即时模式(--instant-add): 由 caja/peony 右键一步到位入口触发。
+	 * 先清掉标志,batch_add_instant 内部回退时会重新进入对话框路径。 */
+	if (GPOINTER_TO_INT (g_object_get_data (G_OBJECT (window), "engrampa-batch-instant"))) {
+		gboolean encrypt = GPOINTER_TO_INT (g_object_get_data (G_OBJECT (window), "engrampa-batch-encrypt"));
+
+		g_object_set_data (G_OBJECT (window), "engrampa-batch-instant", NULL);
+		g_object_set_data (G_OBJECT (window), "engrampa-batch-encrypt", NULL);
+		batch_add_instant (window, file_list, encrypt);
+		return;
+	}
 
 	data = g_new0 (DialogData, 1);
 	data->settings = g_settings_new (ENGRAMPA_SCHEMA_BATCH_ADD);
@@ -502,6 +663,21 @@ dlg_batch_add_files (FrWindow *window,
 			g_free (automatic_name);
 			automatic_name = g_uri_unescape_string (file_name_from_path (first_filename), NULL);
 		}
+	}
+
+	/* 命名模板(BandiZip 式): ${NAME} = 基名(单文件去源扩展名/多选取父目录名),
+	 * 其余按 strftime 展开;默认模板 '${NAME}' 即去扩展名行为。 */
+	{
+		char *tmpl = g_settings_get_string (data->settings, PREF_BATCH_ADD_NAMING_TEMPLATE);
+		char *base = (file_list->next == NULL)
+				? name_without_ext (automatic_name)
+				: g_strdup (automatic_name);
+		char *expanded = naming_template_expand (tmpl, base);
+
+		g_free (base);
+		g_free (tmpl);
+		g_free (automatic_name);
+		automatic_name = expanded;
 	}
 
 	_gtk_entry_set_filename_text (GET_ENTRY ("a_add_to_entry"), automatic_name);
@@ -555,9 +731,31 @@ dlg_batch_add_files (FrWindow *window,
 
 	/* Run dialog. */
 
+	/* 格式预选: 模板名自带已知扩展名时跟随模板,否则用默认扩展名 */
 	default_ext = g_settings_get_string (data->settings, PREF_BATCH_ADD_DEFAULT_EXTENSION);
-	update_archive_type_combo_box_from_ext (data, default_ext);
+	{
+		const char *entry_text = gtk_entry_get_text (GET_ENTRY ("a_add_to_entry"));
+		const char *tmpl_ext = NULL;
+		int         j;
+
+		for (j = 0; data->supported_types[j] != -1; j++) {
+			const char *ext = mime_type_desc[data->supported_types[j]].default_ext;
+			if ((ext != NULL) && g_str_has_suffix (entry_text, ext)) {
+				tmpl_ext = ext;
+				break;
+			}
+		}
+		update_archive_type_combo_box_from_ext (data, tmpl_ext != NULL ? tmpl_ext : default_ext);
+	}
 	g_free (default_ext);
+
+	/* 预设密码(WinRAR 式): 非空则预填,可修改 */
+	{
+		char *preset = g_settings_get_string (data->settings, PREF_BATCH_ADD_DEFAULT_PASSWORD);
+		if ((preset != NULL) && (*preset != '\0'))
+			gtk_entry_set_text (GET_ENTRY ("a_password_entry"), preset);
+		g_free (preset);
+	}
 
 	gtk_widget_grab_focus (GET_WIDGET ("a_add_to_entry"));
 	gtk_editable_select_region (GTK_EDITABLE (GET_WIDGET ("a_add_to_entry")),
