@@ -229,8 +229,10 @@ selfcheck() {
         /usr/share/engrampa/packages.match \
         /usr/share/man/man1/engrampa.1 \
     ; do
-        # 注意: 不用 grep -q 于管道(指南红线: SIGPIPE 误杀生产端),grep 全量读取
-        printf '%s\n' "$listing" | grep "/$path\$" >/dev/null || die "payload self-check: $path NOT in deb"
+        # dpkg-deb -c 的路径带 ./ 前缀,按路径后缀+行尾锚定匹配($path 自带前导 /,
+        # 模式不要再加 / —— 曾出现 "//usr/..." 双斜杠永不匹配的事故);
+        # 不用 grep -q 于管道(指南红线: SIGPIPE 误杀生产端),grep 全量读取
+        printf '%s\n' "$listing" | grep -- "$path\$" >/dev/null || die "payload self-check: $path NOT in deb"
     done
     # peony-qt 右键插件(麒麟桌面必备件;若头文件缺失被跳过则会在此报缺失)
     printf '%s\n' "$listing" | grep "peony-extensions/libpeony-menu-plugin-engrampa.so\$" >/dev/null \
