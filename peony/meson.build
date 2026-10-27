@@ -19,22 +19,37 @@ if get_option('peony-actions') and cpp_found
   have_peony_headers = cxx.has_header('peony-qt/menu-plugin-iface.h')
 
   if qt5core_dep.found() and qt5gui_dep.found() and qt5widgets_dep.found() and have_peony_headers
-    qt5 = import('qt5')
-    # moc 不走编译器的系统默认包含路径,解析 Q_INTERFACES 的接口声明
-    # (peony-qt/*.h 在 /usr/include 下)需要显式 -I;另外插件不依赖 glib
-    # (Qt 的 signals 宏与 gdbusintrospection.h 的成员名冲突)。
-    moc_h = qt5.preprocess(moc_headers: 'peony-engrampa-plugin.h',
-                           dependencies: [qt5core_dep, qt5widgets_dep],
-                           extra_args: ['-I/usr/include'])
+    # meson 0.63 的 qt5.preprocess 不支持 extra_args,而 moc 不搜索编译器
+    # 默认系统路径(解析 Q_INTERFACES 需要能找到 /usr/include/peony-qt/*.h),
+    # 故手动跑 moc:include 路径从 pkg-config 推导(Qt 头 + 系统头)。
+    # 另外插件不依赖 glib(Qt 的 signals 宏与 gdbusintrospection.h 成员冲突)。
+    qt5_inc = qt5core_dep.get_pkgconfig_variable('includedir')
+    qt5_bins = qt5core_dep.get_pkgconfig_variable('host_bins', default: '')
+    moc = find_program(qt5_bins / 'moc', 'moc', required: false)
 
-    shared_module('peony-menu-plugin-engrampa',
-      ['peony-engrampa-plugin.cpp', moc_h],
-      dependencies: [qt5core_dep, qt5gui_dep, qt5widgets_dep],
-      include_directories: config_inc,
-      install: true,
-      install_dir: join_paths(get_option('prefix'), get_option('libdir'),
-                              'peony-extensions'),
-    )
-    peony_plugin_summary = 'yes'
+    if moc.found()
+      moc_gen = custom_target('peony-plugin-moc',
+        input: 'peony-engrampa-plugin.h',
+        output: 'moc_peony-engrampa-plugin.cpp',
+        command: [moc,
+                  '-I' + qt5_inc,
+                  '-I' + qt5_inc / 'QtCore',
+                  '-I' + qt5_inc / 'QtGui',
+                  '-I' + qt5_inc / 'QtWidgets',
+                  '-I/usr/include',
+                  '@INPUT@', '-o', '@OUTPUT@'])
+
+      shared_module('peony-menu-plugin-engrampa',
+        ['peony-engrampa-plugin.cpp', moc_gen],
+        dependencies: [qt5core_dep, qt5gui_dep, qt5widgets_dep],
+        include_directories: config_inc,
+        install: true,
+        install_dir: join_paths(get_option('prefix'), get_option('libdir'),
+                                'peony-extensions'),
+      )
+      peony_plugin_summary = 'yes'
+    else
+      peony_plugin_summary = 'no (moc not found)'
+    endif
   endif
 endif
