@@ -14,11 +14,14 @@
 
 #include <QProcess>
 #include <QUrl>
-#include <QDateTime>
 
 #include <ctime>
-#include <glib.h>
-#include <gio/gio.h>
+
+/*
+ * 注意: 本插件不 include glib/gio —— Qt 的 signals 宏会与
+ * gdbusintrospection.h 的 signals 成员冲突(qobjectdefs.h 定义
+ * #define signals Q_SIGNALS)。gsettings 读取经 QProcess 调 CLI 完成。
+ */
 
 /* ---------- 与 engrampa 主程序 src/naming-template.c 同义的展开 ---------- */
 
@@ -36,16 +39,31 @@ expand_template (const QString &tmpl, const QString &name)
 	return name;
 }
 
+/* gsettings get 经 CLI:输出形如 'value'(带单引号与换行) */
 static QString
 gsettings_get_string (const char *key)
 {
-	GSettings *s = g_settings_new ("org.mate.engrampa.dialogs.batch-add");
-	gchar     *v = g_settings_get_string (s, key);
-	QString    r = QString::fromUtf8 (v != NULL ? v : "");
+	QProcess   p;
+	QString    out;
+	QString    v;
 
-	g_free (v);
-	g_object_unref (s);
-	return r;
+	p.start (QStringLiteral ("gsettings"),
+		 QStringList () << QStringLiteral ("get")
+				<< QStringLiteral ("org.mate.engrampa.dialogs.batch-add")
+				<< QLatin1String (key));
+	if (! p.waitForStarted (2000) || ! p.waitForFinished (3000))
+		return QString ();
+
+	out = QString::fromUtf8 (p.readAllStandardOutput ()).trimmed ();
+	if (out.size () >= 2 && out.startsWith (QLatin1Char ('\'')) && out.endsWith (QLatin1Char ('\'')))
+		v = out.mid (1, out.size () - 2);
+	else if (out.startsWith (QLatin1String ("@s ")))
+		v = out.mid (3).trimmed ();
+	else
+		v = out;
+	if (v.startsWith (QLatin1Char ('\'')) && v.endsWith (QLatin1Char ('\'')) && v.size () >= 2)
+		v = v.mid (1, v.size () - 2);
+	return v;
 }
 
 /* ${NAME} 语义与主程序一致: 单选取基名去扩展名,多选取父目录名 */
