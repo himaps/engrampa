@@ -22,7 +22,7 @@ if get_option('peony-actions') and cpp_found
 
   if qt5core_dep.found() and qt5gui_dep.found() and qt5widgets_dep.found() and have_peony_headers
     qt5 = import('qt5')
-    moc_h = qt5.preprocess(moc: 'peony-engrampa-plugin.h',
+    moc_h = qt5.preprocess(moc_headers: 'peony-engrampa-plugin.h',
                            dependencies: [qt5core_dep, qt5widgets_dep])
 
     shared_module('peony-menu-plugin-engrampa',
